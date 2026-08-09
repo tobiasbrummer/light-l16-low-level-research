@@ -20,6 +20,8 @@ The following results are confirmed for one production Light L16 running build
 - A vendor init service named `fihop` was used to run a fixed-purpose script as
   UID 0 in the normal Android boot. This was verified without flashing,
   changing a partition, or installing persistent root.
+- The checked-in A1 dry-run passed its live identity, service-state, binary,
+  and cleanup checks without invoking `lcc` or issuing a capture request.
 
 This repository does **not** claim a successful manual single-module capture.
 The factory `lcc` path and its module mask are understood, but a live capture is

@@ -150,3 +150,23 @@ its persistent properties and the payload writes temporary result files, but it
 does not issue a camera-control request. Before adding an execution mode, the
 remaining work is to capture trusted A1 reference parameters, specify timeout
 and logging behavior, and define the post-failure normal-restart check.
+
+## Confirmed dry-run result
+
+The checked-in payload completed successfully on the known production camera
+on 2026-08-09. Immediately before the trigger, CameraService reported an empty
+active-client list. The result confirmed the expected UID-0 init-shell context,
+build, kernel, SELinux state, ASIC firmware, `lcc` identity,
+`manual_control=0`, and stopped `fwupgrade` service. It ended with:
+
+```text
+camera_clients=none
+capture_executed=no
+preflight=PASS
+```
+
+Independent host cleanup then left the trigger at zero, all five argument
+properties empty, `fihop` and `fwupgrade` stopped, the ordinary ADB shell at UID
+2000, `manual_control=0`, and no payload, result, or CameraService dump in
+`/data/local/tmp`. This confirms the preflight and cleanup path only. No `lcc`
+process or camera-control request was executed.
