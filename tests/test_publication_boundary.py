@@ -54,7 +54,8 @@ def test_a1_dry_run_is_syntax_valid_and_cannot_capture() -> None:
 
     assert text.index("setprop persist.sys.fihop 0") < text.index("IDENTITY=$(id)")
     assert "02 00 00 11 F1 00" in text
-    assert "No active camera clients yet." in text
+    assert 'ACTIVE_CLIENTS=$(' in text
+    assert '[ "$ACTIVE_CLIENTS" = "[]" ]' in text
     assert "capture_executed=no" in text
     for forbidden in (
         "--execute",

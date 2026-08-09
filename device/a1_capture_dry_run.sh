@@ -103,8 +103,12 @@ printf 'fwupgrade=%s\n' "$FWUPGRADE_STATE"
 
 /system/bin/dumpsys media.camera > "$CAMERA_DUMP" \
     || fail "camera_service_dump_failed"
-/system/bin/toybox grep -F -q "No active camera clients yet." "$CAMERA_DUMP" \
-    || fail "camera_client_present_or_state_unknown"
+ACTIVE_CLIENTS=$(
+    /system/bin/toybox sed -n \
+        '/Active Camera Clients:/,/Allowed users:/p' "$CAMERA_DUMP" \
+        | /system/bin/toybox sed -n '2p'
+)
+[ "$ACTIVE_CLIENTS" = "[]" ] || fail "camera_client_present_or_state_unknown"
 printf 'camera_clients=none\n'
 
 printf '%s\n' 'mask=02 00 00 module=A1 asic=1'
