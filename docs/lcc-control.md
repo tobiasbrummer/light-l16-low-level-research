@@ -360,6 +360,22 @@ pixels: the LRI's decoded module list, exposure metadata, dimensions, raw
 format, and sample statistics must be checked separately after the camera has
 rebooted normally.
 
+## Confirmed device-side wrapper syntax
+
+The exact 14,338-byte `device/a1_capture_once.sh` from commit `7a10811` was
+copied to a uniquely named temporary file on the identified production L16 on
+2026-08-09. Its host and device SHA-1 values both were:
+
+```text
+4cb888e6470f9c5a052fbc74f4276608c831b1e4
+```
+
+The device's `/system/bin/sh -n` returned zero. The temporary file was then
+removed and its absence verified. A final read-only state check reported
+`persist.sys.fihop=0`, `manual_control mode is 0x0`, and no `lcc` process. This
+validated parsing only: the payload itself, the root runner, `lcc`, the camera
+HAL, and the capture path were not executed.
+
 ## Confirmed dry-run result
 
 The checked-in payload completed successfully on the known production camera

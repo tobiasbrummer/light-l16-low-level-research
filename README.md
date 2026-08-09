@@ -26,7 +26,8 @@ The following results are confirmed for one production Light L16 running build
   timeout, repeats `manual_control` cleanup, collects logs, removes its temporary
   executable, identifies the HAL-generated timestamped LRI without touching
   older files, and requires a normal reboot after every attempted capture. It
-  has not yet been executed on the camera.
+  has not yet been executed on the camera. The exact current payload has passed
+  `/system/bin/sh -n` on the identified production device.
 - A host-only analyzer conservatively separates wrapper failure, new camera or
   kernel diagnostics, incomplete evidence, and a control-path pass. It verifies
   the LRI transfer hash and public LELR framing but never upgrades that result
