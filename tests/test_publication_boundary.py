@@ -96,6 +96,9 @@ def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
     assert "-R 4160,3120 -e 2609592 -g 1.0" in text
     assert " -F " not in text
     assert " -C " not in text
+    assert "lcc_response_files=disabled" in text
+    assert "persistent_pixel_output=not_requested_by_this_command" in text
+    assert "capture_output_file=disabled" not in text
     assert 'printf \'0\\n\' > "$MANUAL_CONTROL"' in text
     assert "NORMAL_REBOOT_REQUIRED=yes" in text
     assert 'rm -f "$LCC_COPY"' in text

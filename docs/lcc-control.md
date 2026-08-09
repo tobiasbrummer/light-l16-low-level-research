@@ -10,8 +10,8 @@ also statically known.
 This proves the userspace control interface. It does **not** prove that a manual
 single-module capture has completed successfully on the examined production
 camera. The repository provides mask tooling, a camera-read-only A1 preflight,
-and a tightly fixed one-shot execution wrapper. The execution wrapper has not
-yet been run on the camera.
+a tightly fixed one-shot execution wrapper, and a conservative host-side log
+analyzer. The execution wrapper has not yet been run on the camera.
 
 ## Relevant factory binary
 
@@ -95,6 +95,29 @@ resolution, and `-F` for frame rate. Each option accepts either one common
 value or one value per selected module. The capture parser also accepts an
 empty FPS list, so `-F` can be omitted; the recovered factory MIPI call does so.
 
+### What `-C` actually does
+
+The binary's built-in help describes `-C` as `--output`, while its actual long
+option table calls it `--channel`. Neither name describes an image-output path
+accurately. The parser's `C` case sets the global `_Bool pipe_fd` at ELF virtual
+address `0x8284`. All of that flag's read references are in
+`wait_for_response()`. When enabled, that function writes hexadecimal CCB read
+data or a write transaction/status line to
+`/data/lcc_output_<transaction-id>.txt`.
+
+`wf_run_capture()` has no reference to `pipe_fd` and does not call
+`wait_for_response()`. Consequently, adding `-C` to a capture does not request
+an LRI, RAW frame, or other pixel artifact. It only enables response files for
+command paths that use `wait_for_response()`.
+
+A separate branch in `wf_run_capture()` does send an additional CCB command
+`0x2E` for the selected resolution. That branch is gated by
+`capture_cmd.resolution_len` at structure offset `0x98`, which the `-R` parser
+fills. It is not gated by `-C`. For the three accepted resolutions, the command
+uses scale denominators 1, 2, and 4 respectively. The fixed A1 command already
+contains `-R 4160,3120`, so this resolution configuration is present even
+though `-C` is absent.
+
 ## Reference values from a normal A1 capture
 
 A normal 28 mm capture made by this camera on 2026-08-08 provides a concrete A1
@@ -133,12 +156,12 @@ omits it:
 This remains a statically and metadata-derived candidate. It has not been
 executed on the camera.
 
-The first execution deliberately omits `-C`. Static inspection shows that this
-flag enables an additional output/channel path, while the recovered factory
-MIPI test does not use it. The first hardware test therefore validates only the
-single-module control and capture path through `lcc`; it is not expected to
-produce an LRI or persistent raw image. Enabling and validating an output path
-is a separate later test.
+The first execution deliberately omits `-C`: its small CCB-response files add
+no pixel evidence and the recovered factory MIPI test does not use it. The
+first hardware test validates only the single-module control and capture path
+through `lcc`; this command contains no known request for an LRI or persistent
+raw image. Finding and validating a genuine pixel-output path is a separate
+later test.
 
 ## Why the first live call needs a wrapper
 
@@ -241,6 +264,30 @@ diagnostic directory under `output/a1-capture-<UTC>/` and requests a normal
 result is available. A preflight failure before `lcc` does not cause an
 automatic reboot.
 
+The pulled bundle can then be classified locally without reconnecting to the
+camera:
+
+```bash
+python3 tools/analyze_a1_capture.py output/a1-capture-<UTC>
+```
+
+The analyzer checks the completed wrapper result, immediate cleanup state,
+CameraService client list, positive `lcc` lifecycle messages, and newly added
+dmesg/logcat faults. It subtracts identical lines from the bounded before
+snapshot so an already-existing message is not reported as a new capture
+failure. Its verdicts and exit codes are:
+
+| Verdict | Exit | Meaning |
+| --- | ---: | --- |
+| `CONTROL_PATH_PASS_UNVERIFIED_PIXELS` | 0 | `lcc` lifecycle, exit, immediate cleanup, and new diagnostics are consistent with a successful control-path attempt |
+| `WRAPPER_FAILED` / `CONTROL_PATH_FAILED` | 1 | an explicit wrapper postcondition or diagnostic error failed |
+| `INCOMPLETE_EVIDENCE` / `PREFLIGHT_STOPPED` | 2 | no capture was attempted or required evidence is missing |
+
+Even the pass verdict reports
+`pixel_validation=not_available_no_pixel_artifact_requested` and
+`post_reboot_validation=not_in_capture_bundle`. It cannot replace the live
+normal-boot checks below.
+
 After the camera returns, verify the normal-boot postcondition before opening
 the camera application:
 
@@ -258,8 +305,8 @@ retrigger `fihop`; perform one normal hardware restart instead.
 `final_status=PASS` has a deliberately narrow meaning: the exact `lcc` process
 returned zero, the gate and process checks passed, and the host requested the
 planned reboot. It is not yet proof that A1 delivered valid pixels. The pulled
-`lcc.txt`, dmesg, logcat, and CameraService snapshots must be inspected before
-any output-enabled or multi-module test.
+`lcc.txt`, dmesg, logcat, and CameraService snapshots must pass the analyzer
+and be reviewed before any genuine pixel-output or multi-module test.
 
 ## Confirmed dry-run result
 

@@ -84,6 +84,24 @@ The last example uses the local `ioctl` PLT-thunk address in the known ARM32
 matters because Ghidra's external import symbol may not own the code references,
 while the local thunk does.
 
+For the known 32-bit `/system/etc/lcc`, the following targeted reports
+reproduce the distinction between `-C` response logging and `-R` resolution
+configuration:
+
+```text
+-postScript DumpReferences.java pipe_fd
+-postScript DumpFunctions.java wait_for_response wf_run_capture
+-postScript DumpInstructions.java parse_commandline 330 0xa80
+-postScript DumpInstructions.java wf_run_capture 56 0xa88
+```
+
+With Ghidra's `0x10000` image base, `pipe_fd` appears at `0x18284`; the ELF
+symbol value is `0x8284`. The expected references are one parser write and
+reads only inside `wait_for_response()`. The capture listing separately reads
+`capture_cmd.resolution_len` at offset `0x98` before constructing command
+`0x2E`. This cross-check prevents the similarly worded `--output` help and
+`--channel` long option from being mistaken for a pixel-output control.
+
 ## Qualcomm comparison
 
 Use the public sources from commit

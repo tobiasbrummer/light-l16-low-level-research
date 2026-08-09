@@ -286,7 +286,8 @@ printf '%s\n' 'factory_tuple=11 F1 00'
 printf '%s\n' \
     'executed_argv=<verified-lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 -R 4160,3120 -e 2609592 -g 1.0'
 printf '%s\n' 'outer_timeout=TERM_after_30s_KILL_after_5s'
-printf '%s\n' 'capture_output_file=disabled'
+printf '%s\n' 'lcc_response_files=disabled'
+printf '%s\n' 'persistent_pixel_output=not_requested_by_this_command'
 
 CAPTURE_ATTEMPTED=yes
 NORMAL_REBOOT_REQUIRED=yes

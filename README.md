@@ -26,6 +26,9 @@ The following results are confirmed for one production Light L16 running build
   timeout, repeats `manual_control` cleanup, collects logs, removes its temporary
   executable, and requires a normal reboot after every attempted capture. It
   has not yet been executed on the camera.
+- A host-only analyzer conservatively separates wrapper failure, new camera or
+  kernel diagnostics, incomplete evidence, and a control-path pass. It never
+  upgrades that result to validated pixels or a verified post-reboot state.
 
 This repository does **not** claim a successful manual single-module capture.
 The factory `lcc` path, its module mask, the A1 reference parameters, and the
