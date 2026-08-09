@@ -210,6 +210,11 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
                 if source.endswith("light_l16_a1_capture.result"):
                     if os.environ.get("FAKE_PULL_RESULT_FAIL") == "1":
                         raise SystemExit(1)
+                    if (
+                        os.environ.get("FAKE_LEGACY_SHELL_STATUS") == "1"
+                        and not (state / "result-ready").exists()
+                    ):
+                        raise SystemExit(1)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(result, encoding="utf-8")
                 elif source.endswith(".lri"):
@@ -225,6 +230,9 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
             command = args[1]
             if "sha1sum" in command:
                 print(os.environ["EXPECTED_PAYLOAD_SHA1"] + "  payload")
+                raise SystemExit(0)
+            if command.startswith("cat '/data/local/tmp/light_l16_a1_capture.armed'"):
+                print("A1_CAPTURE_2609592NS_GAIN_1.0_ONCE")
                 raise SystemExit(0)
             if command.startswith("getprop "):
                 print(get_prop(shlex.split(command)[1]))
@@ -254,8 +262,29 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
                 for number in range(3, 6):
                     set_prop(f"persist.sys.fihop{number}", "")
                 raise SystemExit(0)
-            if command.startswith("grep -q '^final_status='"):
-                raise SystemExit(0 if (state / "triggered").exists() else 1)
+            if "grep -q '^final_status='" in command:
+                poll_count_path = state / "poll-count"
+                poll_count = (
+                    int(poll_count_path.read_text(encoding="utf-8"))
+                    if poll_count_path.exists()
+                    else 0
+                )
+                poll_count += 1
+                poll_count_path.write_text(str(poll_count), encoding="utf-8")
+                pending_polls = int(os.environ.get("FAKE_RESULT_PENDING_POLLS", "0"))
+                ready = (state / "triggered").exists() and poll_count > pending_polls
+                if ready:
+                    (state / "result-ready").touch()
+                if "LIGHT_L16_RESULT_COMPLETE" in command:
+                    print(
+                        "LIGHT_L16_RESULT_COMPLETE"
+                        if ready
+                        else "LIGHT_L16_RESULT_PENDING"
+                    )
+                    raise SystemExit(0)
+                if os.environ.get("FAKE_LEGACY_SHELL_STATUS") == "1":
+                    raise SystemExit(0)
+                raise SystemExit(0 if ready else 1)
             raise SystemExit(0)
             """
         ),
@@ -316,6 +345,32 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
     )
     assert len(ambiguous_results) == 1
     assert "final_status=PASS" in ambiguous_results[0].read_text(encoding="utf-8")
+
+    legacy_state = tmp_path / "fake-adb-legacy-shell-state"
+    legacy_state.mkdir()
+    legacy_env = env.copy()
+    legacy_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "legacy-shell-output"),
+            "FAKE_ADB_STATE": str(legacy_state),
+            "FAKE_LEGACY_SHELL_STATUS": "1",
+            "FAKE_RESULT_PENDING_POLLS": "2",
+        }
+    )
+    legacy = subprocess.run(
+        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        cwd=ROOT,
+        env=legacy_env,
+        capture_output=True,
+        text=True,
+    )
+    assert legacy.returncode == 0, legacy.stderr
+    assert int((legacy_state / "poll-count").read_text(encoding="utf-8")) == 3
+    assert (legacy_state / "result-ready").exists()
+    assert (legacy_state / "rebooted").exists()
+    legacy_results = list((tmp_path / "legacy-shell-output").glob("*/result.txt"))
+    assert len(legacy_results) == 1
+    assert "final_status=PASS" in legacy_results[0].read_text(encoding="utf-8")
 
     stopped_state = tmp_path / "fake-adb-stopped-state"
     stopped_state.mkdir()

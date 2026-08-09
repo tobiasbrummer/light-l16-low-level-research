@@ -173,6 +173,11 @@ printf 'payload_sha1=%s\n' "$HOST_SHA1"
 
 "$ADB" shell \
     "printf '%s\\n' '$ARM_VALUE' > '$REMOTE_ARM'; chmod 0600 '$REMOTE_ARM'"
+DEVICE_ARM_VALUE=$("$ADB" shell "cat '$REMOTE_ARM'" | tr -d '\r')
+[ "$DEVICE_ARM_VALUE" = "$ARM_VALUE" ] || {
+    printf 'refusing trigger: arm file did not round-trip exactly\n' >&2
+    exit 1
+}
 "$ADB" shell 'setprop persist.sys.fihop 0'
 "$ADB" shell "setprop persist.sys.fihop1 /system/bin/sh"
 "$ADB" shell "setprop persist.sys.fihop2 '$REMOTE_PAYLOAD'"
@@ -204,10 +209,26 @@ fi
 
 ATTEMPT=0
 while [ "$ATTEMPT" -lt 90 ]; do
-    if "$ADB" shell "grep -q '^final_status=' '$REMOTE_RESULT'" >/dev/null 2>&1; then
-        RESULT_SEEN=yes
-        break
-    fi
+    # This production Android build uses the legacy adb shell protocol: the
+    # host sees status 0 even when the remote command exits nonzero.  Determine
+    # completion from an exact stdout marker, never from adb's exit status.
+    POLL_STATE=$(
+        "$ADB" shell \
+            "if /system/bin/toybox grep -q '^final_status=' '$REMOTE_RESULT' 2>/dev/null; then printf '%s\\n' LIGHT_L16_RESULT_COMPLETE; else printf '%s\\n' LIGHT_L16_RESULT_PENDING; fi" \
+            2>/dev/null || true
+    )
+    POLL_STATE=$(printf '%s' "$POLL_STATE" | tr -d '\r')
+    case "$POLL_STATE" in
+        LIGHT_L16_RESULT_COMPLETE)
+            RESULT_SEEN=yes
+            break
+            ;;
+        LIGHT_L16_RESULT_PENDING|"") ;;
+        *)
+            printf 'Ignoring unexpected result-poll response: %s\n' \
+                "$POLL_STATE" >&2
+            ;;
+    esac
     ATTEMPT=$((ATTEMPT + 1))
     sleep 1
 done

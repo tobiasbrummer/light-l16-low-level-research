@@ -303,8 +303,14 @@ The host side requires exactly one authorized ADB device and rejects it unless
 build, model, and product identifiers match the examined L16. It then pushes
 and hashes the payload, creates the one-use arm file, verifies all six `fihop`
 properties before triggering once, and polls for a completed result for at most
-90 seconds. Its exit trap clears all six properties. It pulls the result and
-diagnostic directory under `output/a1-capture-<UTC>/` and requests a normal
+90 seconds. The examined Android build uses the legacy ADB shell protocol and
+does not propagate remote command failures to the host, so completion is
+recognized only from an exact stdout marker produced after `final_status`
+exists. The one-use arm value is likewise read back and compared before the
+trigger. Its exit trap clears all six properties; after a trigger may have been
+delivered it does not delete the remote arm or payload in the trap, because
+that could race a newly started wrapper. It pulls the result and diagnostic
+directory under `output/a1-capture-<UTC>/` and requests a normal
 `adb reboot` whenever the device reports `capture_attempted=yes` or no complete
 result is available. A preflight failure before `lcc` does not cause an
 automatic reboot. When the device reports one new HAL-generated LRI, the host
@@ -375,6 +381,33 @@ removed and its absence verified. A final read-only state check reported
 `persist.sys.fihop=0`, `manual_control mode is 0x0`, and no `lcc` process. This
 validated parsing only: the payload itself, the root runner, `lcc`, the camera
 HAL, and the capture path were not executed.
+
+## Confirmed legacy ADB behavior and aborted capture attempts
+
+Two initial live attempts on 2026-08-09 stopped before the wrapper created its
+PID-specific work directory. Their retained 95-byte root result ended at:
+
+```text
+mode=A1_FIXED_CAPTURE_ONCE
+warning=this_payload_executes_lcc_after_preflight
+failure=not_armed
+```
+
+There was no new `RDI_*.lri`, no completed result, and no evidence that the
+fixed `lcc` command, the camera HAL capture path, or a sensor was reached. The
+host requested its conservative normal reboot in both cases.
+
+The second attempt exposed a device-specific supervisor bug. On this production
+build, `adb shell 'false'` returns status zero to the host. A remote `grep` of
+the incomplete result reported status one inside the device shell while the
+enclosing host `adb` process still returned zero. The old poll therefore tried
+to pull the result immediately and its failure activated the reboot trap. A
+post-reboot `console-ramoops` copy ended with a normal host-requested reboot at
+uptime 366.797897 seconds and contained no incident-time `lcc` or camera-driver
+fault. The updated supervisor uses an exact `COMPLETE`/`PENDING` stdout marker,
+verifies the arm file contents before triggering, and has a regression test in
+which the first two remote polls are pending while legacy ADB reports success.
+No further live attempt is represented by this section.
 
 ## Confirmed dry-run result
 
