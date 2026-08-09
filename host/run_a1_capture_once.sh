@@ -106,7 +106,10 @@ finish_host() {
     if [ "$PROPERTIES_CLEARED" != "yes" ]; then
         clear_properties
     fi
-    if [ "$REMOTE_FILES_CLEARED" != "yes" ]; then
+    # Once the trigger may have been delivered, deleting the arm file here can
+    # race the just-started device payload.  Leave both files in place for the
+    # reboot/recovery path; the normal completed path removes them below.
+    if [ "$REMOTE_FILES_CLEARED" != "yes" ] && [ "$TRIGGER_SENT" = "no" ]; then
         "$ADB" shell "rm -f '$REMOTE_PAYLOAD' '$REMOTE_ARM'" \
             >/dev/null 2>&1 || true
     fi
@@ -190,8 +193,14 @@ F5=$("$ADB" shell 'getprop persist.sys.fihop5' | tr -d '\r')
 
 PROPERTIES_CLEARED=no
 TRIGGER_SENT=maybe
-"$ADB" shell 'setprop persist.sys.fihop 8'
-TRIGGER_SENT=yes
+if "$ADB" shell 'setprop persist.sys.fihop 8'; then
+    TRIGGER_SENT=yes
+else
+    # The property service can start fihop before adb observes the command's
+    # exit status.  Treat this as ambiguous delivery and poll the result instead
+    # of running the EXIT cleanup against a payload that may already be active.
+    printf 'Trigger command returned nonzero; delivery may have occurred, polling result.\n' >&2
+fi
 
 ATTEMPT=0
 while [ "$ATTEMPT" -lt 90 ]; do

@@ -232,7 +232,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
             if command == "setprop persist.sys.fihop 8":
                 set_prop("persist.sys.fihop", "8")
                 (state / "triggered").touch()
-                raise SystemExit(0)
+                raise SystemExit(int(os.environ.get("FAKE_TRIGGER_STATUS", "0")))
             if command.startswith("setprop persist.sys.fihop ") and ";" not in command:
                 parts = shlex.split(command)
                 set_prop(parts[1], parts[2])
@@ -290,6 +290,33 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
     assert len(pixels) == 1
     assert pixels[0].read_bytes().startswith(b"LELR")
 
+    ambiguous_state = tmp_path / "fake-adb-ambiguous-trigger-state"
+    ambiguous_state.mkdir()
+    ambiguous_env = env.copy()
+    ambiguous_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "ambiguous-trigger-output"),
+            "FAKE_ADB_STATE": str(ambiguous_state),
+            "FAKE_TRIGGER_STATUS": "1",
+        }
+    )
+    ambiguous = subprocess.run(
+        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        cwd=ROOT,
+        env=ambiguous_env,
+        capture_output=True,
+        text=True,
+    )
+    assert ambiguous.returncode == 0, ambiguous.stderr
+    assert "delivery may have occurred" in ambiguous.stderr
+    assert (ambiguous_state / "triggered").exists()
+    assert (ambiguous_state / "rebooted").exists()
+    ambiguous_results = list(
+        (tmp_path / "ambiguous-trigger-output").glob("*/result.txt")
+    )
+    assert len(ambiguous_results) == 1
+    assert "final_status=PASS" in ambiguous_results[0].read_text(encoding="utf-8")
+
     stopped_state = tmp_path / "fake-adb-stopped-state"
     stopped_state.mkdir()
     stopped_env = env.copy()
@@ -332,6 +359,11 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
     assert failed_pull.returncode != 0
     assert (failed_pull_state / "triggered").exists()
     assert (failed_pull_state / "rebooted").exists()
+    failed_pull_calls = (failed_pull_state / "calls.log").read_text(encoding="utf-8")
+    assert (
+        "rm -f '/data/local/tmp/light_l16_a1_capture_once.sh' "
+        "'/data/local/tmp/light_l16_a1_capture.armed'"
+    ) not in failed_pull_calls
 
 
 def test_repository_contains_no_proprietary_binary_extensions() -> None:
