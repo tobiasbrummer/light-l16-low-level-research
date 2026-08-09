@@ -54,6 +54,13 @@ def test_a1_dry_run_is_syntax_valid_and_cannot_capture() -> None:
 
     assert text.index("setprop persist.sys.fihop 0") < text.index("IDENTITY=$(id)")
     assert "02 00 00 11 F1 00" in text
+    planned = next(line for line in text.splitlines() if "planned_argv=" in line)
+    assert (
+        "planned_argv=<lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 "
+        "-R 4160,3120 -e 2609592 -g 1.0"
+    ) in planned
+    assert " -F " not in planned
+    assert "<reference-" not in planned
     assert 'ACTIVE_CLIENTS=$(' in text
     assert '[ "$ACTIVE_CLIENTS" = "[]" ]' in text
     assert "capture_executed=no" in text

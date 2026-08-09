@@ -91,9 +91,46 @@ modules. For A1, the statically derived positional part is therefore:
 
 The relevant parameter options are `-e` for exposure, `-g` for gain, `-R` for
 resolution, and `-F` for frame rate. Each option accepts either one common
-value or one value per selected module. A first live test must reuse values
-observed in an immediately preceding normal capture rather than inventing
-settings.
+value or one value per selected module. The capture parser also accepts an
+empty FPS list, so `-F` can be omitted; the recovered factory MIPI call does so.
+
+## Reference values from a normal A1 capture
+
+A normal 28 mm capture made by this camera on 2026-08-08 provides a concrete A1
+reference. The source LRI has SHA-256
+`04a5589f0ed5e66a866d81e3f2376c2f90411b83ae85279e075122db2566bf12`.
+Its A1 module record contains:
+
+| Field | A1 value |
+| --- | ---: |
+| `sensor_exposure` | 2,609,592 ns |
+| `sensor_analog_gain` | 1.0 |
+| `sensor_digital_gain` | 1.0 |
+| raw format | `RAW_PACKED_10BPP` |
+| dimensions | 4160 x 3120 |
+| row stride | 5200 bytes |
+
+The global `ViewPreferences` record differs slightly: it reports
+`image_integration_time_ns = 2,601,928` and `image_gain = 2.0`. The paired JPEG
+(SHA-256
+`8f60161a7cbad17a6b62139ad2de6f7002c21355109b881a8f734494833e5fe5`)
+independently reports 1/384 s, ISO 200, 28 mm, and 4160 x 3120. This confirms
+that the global values describe the rendered exposure, but they should not be
+substituted for the direct per-module values: the current `liblight_ccb.so`
+passes the `lcc -g` float directly into the CCB sensitivity command. The
+best-supported A1 input is therefore gain 1.0 and exposure 2,609,592 ns.
+
+No capture FPS is stored in this LRI, and `sensor_scan_speed` is absent. A
+Camera2 preview rate would describe a different path and is not a justified
+substitute. Because `-F` is optional, the first candidate command deliberately
+omits it:
+
+```text
+<lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 -R 4160,3120 -e 2609592 -g 1.0
+```
+
+This remains a statically and metadata-derived candidate. It has not been
+executed on the camera.
 
 ## Why the first live call needs a wrapper
 
@@ -117,11 +154,11 @@ For that reason, the first checked-in device payload is only
 - the exact production build, completed normal boot, and known `lcc` identity;
 - `manual_control=0`, a stopped `fwupgrade` service, and no active camera
   clients;
-- the fixed A1 mask and factory tuple that a later wrapper would use.
+- the fixed A1 mask, factory tuple, and reference parameters that a later
+  wrapper would use.
 
-It prints a plan containing placeholders for reference exposure, gain,
-resolution, and FPS. It never copies or invokes `lcc`, never writes camera
-sysfs, and has no execution option.
+It prints the concrete plan above. It never copies or invokes `lcc`, never
+writes camera sysfs, and has no execution option.
 
 ## Running the camera-read-only A1 preflight
 
@@ -147,9 +184,10 @@ preflight=PASS
 
 This is still a camera-read-only inventory step: the bounded root runner clears
 its persistent properties and the payload writes temporary result files, but it
-does not issue a camera-control request. Before adding an execution mode, the
-remaining work is to capture trusted A1 reference parameters, specify timeout
-and logging behavior, and define the post-failure normal-restart check.
+does not issue a camera-control request. The trusted A1 reference parameters
+are now resolved. Before adding an execution mode, the remaining work is to
+implement a fixed-purpose supervisor, specify timeout and logging behavior,
+and define the post-failure normal-restart check.
 
 ## Confirmed dry-run result
 
@@ -169,4 +207,7 @@ Independent host cleanup then left the trigger at zero, all five argument
 properties empty, `fihop` and `fwupgrade` stopped, the ordinary ADB shell at UID
 2000, `manual_control=0`, and no payload, result, or CameraService dump in
 `/data/local/tmp`. This confirms the preflight and cleanup path only. No `lcc`
-process or camera-control request was executed.
+process or camera-control request was executed. The later metadata-only update
+replaced the plan's placeholders with the values above and removed the
+unjustified guessed FPS argument; that updated plan line has not been re-run on
+the device, while the diagnostic and cleanup control flow is unchanged.

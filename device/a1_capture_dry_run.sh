@@ -114,6 +114,6 @@ printf 'camera_clients=none\n'
 printf '%s\n' 'mask=02 00 00 module=A1 asic=1'
 printf '%s\n' 'factory_tuple=11 F1 00'
 printf '%s\n' \
-    'planned_argv=<lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 -R <reference-resolution> -e <reference-exposure> -g <reference-gain> -F <reference-fps>'
+    'planned_argv=<lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 -R 4160,3120 -e 2609592 -g 1.0'
 printf '%s\n' 'capture_executed=no'
 printf '%s\n' 'preflight=PASS'
