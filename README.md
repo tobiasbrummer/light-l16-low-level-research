@@ -28,6 +28,7 @@ a separate hardware test with additional cleanup requirements.
 ## Documentation
 
 - [Private driver ABI and data flow](docs/driver-abi.md)
+- [Factory module selection and camera-read-only A1 preflight](docs/lcc-control.md)
 - [Temporary root runner](docs/temporary-root.md)
 - [Reproducing the offline analysis](docs/reproduction.md)
 - [Security policy and device-safety boundary](SECURITY.md)

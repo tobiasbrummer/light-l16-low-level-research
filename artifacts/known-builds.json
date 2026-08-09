@@ -18,6 +18,11 @@
           "sha256": "96a4fa8e750bfd13c4bdbe6a007807b5e8101b23ebd1de498b3c8e33bb3670ac",
           "gnu_build_id": "6251e338ca3270cb1c581dab7fa7dc0d"
         },
+        "system/etc/lcc": {
+          "sha256": "eb2eed76d60ca309813f5a61130e19576385b0e41ba213aa2df6e0a5534bcfce",
+          "sha1": "01b4ea363174240bee5a3005ba9c39f6cb529e6f",
+          "size": 501352
+        },
         "system/etc/fihop.sh": {
           "sha256": "6550cce118492e43c5285d469f7dc383e4d6c14c7cf766de1c82cb57fbaebe4f"
         }
