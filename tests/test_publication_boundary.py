@@ -64,7 +64,7 @@ def test_a1_dry_run_is_syntax_valid_and_cannot_capture() -> None:
     ) in planned
     assert " -F " not in planned
     assert "<reference-" not in planned
-    assert 'ACTIVE_CLIENTS=$(' in text
+    assert "ACTIVE_CLIENTS=$(" in text
     assert '[ "$ACTIVE_CLIENTS" = "[]" ]' in text
     assert "capture_executed=no" in text
     for forbidden in (
@@ -85,7 +85,7 @@ def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
     if shell is not None:
         subprocess.run([shell, "-n", str(payload)], check=True)
 
-    clear = 'setprop persist.sys.fihop 0'
+    clear = "setprop persist.sys.fihop 0"
     armed = '[ "$ARMED" = "$ARM_VALUE" ]'
     attempted = "CAPTURE_ATTEMPTED=yes"
     assert text.index(clear) < text.index(': > "$OUT"')
@@ -97,9 +97,17 @@ def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
     assert " -F " not in text
     assert " -C " not in text
     assert "lcc_response_files=disabled" in text
-    assert "persistent_pixel_output=not_requested_by_this_command" in text
+    assert "hal_lri_output=expected_automatically" in text
+    assert "HAL_SOURCE=/system/lib/hw/camera.msm8996.so" in text
+    assert "EXPECTED_HAL_SIZE=1338100" in text
+    assert "EXPECTED_HAL_SHA1=016602174e0635e79cda5566d5e850c1294a9300" in text
+    assert "LRI_DIR=/sdcard/DCIM/camera" in text
+    assert 'snapshot_lri_paths "$WORKDIR/lri.before.txt"' in text
+    assert 'snapshot_lri_paths "$WORKDIR/lri.after.txt"' in text
+    assert "lri_artifact_missing_or_ambiguous" in text
     assert "capture_output_file=disabled" not in text
-    assert 'printf \'0\\n\' > "$MANUAL_CONTROL"' in text
+    assert "persistent_pixel_output=not_requested_by_this_command" not in text
+    assert "printf '0\\n' > \"$MANUAL_CONTROL\"" in text
     assert "NORMAL_REBOOT_REQUIRED=yes" in text
     assert 'rm -f "$LCC_COPY"' in text
     for forbidden in (
@@ -115,7 +123,9 @@ def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
         assert forbidden not in text
 
 
-def test_host_capture_supervisor_requires_confirmation_and_reboots(tmp_path: Path) -> None:
+def test_host_capture_supervisor_requires_confirmation_and_reboots(
+    tmp_path: Path,
+) -> None:
     supervisor = ROOT / "host" / "run_a1_capture_once.sh"
     shell = shutil.which("sh")
     assert shell is not None
@@ -133,8 +143,10 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(tmp_path: Pat
         textwrap.dedent(
             """\
             #!/usr/bin/env python3
+            import hashlib
             import os
             import shlex
+            import struct
             import sys
             from pathlib import Path
 
@@ -161,6 +173,12 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(tmp_path: Pat
 
             capture_attempted = os.environ.get("FAKE_CAPTURE_ATTEMPTED", "yes")
             final_status = os.environ.get("FAKE_FINAL_STATUS", "PASS")
+            pixel = (
+                struct.pack("<4sQQIB7x", b"LELR", 43, 35, 8, 0)
+                + b"raw"
+                + b"protobuf"
+            )
+            pixel_sha1 = hashlib.sha1(pixel).hexdigest()
             result = (
                 "mode=A1_FIXED_CAPTURE_ONCE\\n"
                 f"capture_attempted={capture_attempted}\\n"
@@ -168,6 +186,10 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(tmp_path: Pat
                 "cleanup_ok=yes\\n"
                 f"normal_reboot_required={'yes' if capture_attempted == 'yes' else 'no'}\\n"
                 "workdir=/data/local/tmp/light_l16_a1_capture_run.1234\\n"
+                "lri_output_count=1\\n"
+                "lri_output_path=/sdcard/DCIM/camera/RDI_20260809_123456_789.lri\\n"
+                f"lri_output_size={len(pixel)}\\n"
+                f"lri_output_sha1={pixel_sha1}\\n"
                 f"final_status={final_status}\\n"
                 "final_reason=simulated\\n"
             )
@@ -190,6 +212,9 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(tmp_path: Pat
                         raise SystemExit(1)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(result, encoding="utf-8")
+                elif source.endswith(".lri"):
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(pixel)
                 else:
                     target.mkdir(parents=True, exist_ok=True)
                     (target / "lcc.txt").write_text("simulated\\n", encoding="utf-8")
@@ -261,6 +286,9 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(tmp_path: Pat
     results = list((tmp_path / "output").glob("*/result.txt"))
     assert len(results) == 1
     assert "final_status=PASS" in results[0].read_text(encoding="utf-8")
+    pixels = list((tmp_path / "output").glob("*/pixels/*.lri"))
+    assert len(pixels) == 1
+    assert pixels[0].read_bytes().startswith(b"LELR")
 
     stopped_state = tmp_path / "fake-adb-stopped-state"
     stopped_state.mkdir()

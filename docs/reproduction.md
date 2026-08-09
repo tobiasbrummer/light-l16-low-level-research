@@ -90,7 +90,7 @@ configuration:
 
 ```text
 -postScript DumpReferences.java pipe_fd
--postScript DumpFunctions.java wait_for_response wf_run_capture
+-postScript DumpFunctions.java wait_for_response wf_parse_capture wf_run_capture
 -postScript DumpInstructions.java parse_commandline 330 0xa80
 -postScript DumpInstructions.java wf_run_capture 56 0xa88
 ```
@@ -101,6 +101,31 @@ reads only inside `wait_for_response()`. The capture listing separately reads
 `capture_cmd.resolution_len` at offset `0x98` before constructing command
 `0x2E`. This cross-check prevents the similarly worded `--output` help and
 `--channel` long option from being mistaken for a pixel-output control.
+`wf_parse_capture()` also shows that ordinary workflow 1 fixes `n_burst` to one;
+only the separate burst workflow parses a replacement value.
+
+For the matching 32-bit `/system/lib/hw/camera.msm8996.so`, verify its identity
+against `artifacts/known-builds.json`, import it as ARM little-endian, and use:
+
+```text
+-postScript DumpFunctions.java @0x96880 @0x9697c @0x9721c
+-postScript DumpFunctions.java @0x97724 @0x97af0 @0x97d1c
+-postScript DumpFunctions.java @0x98290 @0x98644 @0x98ce4
+```
+
+Those ELF virtual addresses identify `startCapture`, `prepareCaptureRequest`,
+`generateFileName`, the constructor, `closeCamera`, `openCamera`,
+`reqThreadRun`, `writeFile`, and `processCaptureResult` respectively. In this
+HAL import Ghidra preserves those ELF addresses; do not add the `0x10000` base
+used by the separate PIE `lcc` project.
+
+The expected cross-check is: `startCapture` sets the request-thread flag;
+`reqThreadRun` submits the special request; `processCaptureResult` recognizes
+stream format `0x30` and calls `writeFile`; and the writer maps every returned
+file descriptor read-only and writes its declared length. The filename pieces
+in `.rodata` resolve to `/sdcard/DCIM/camera/`, `RDI_`,
+`%Y%m%d_%H%M%S`, `_%03ld`, and `.lri`. `closeCamera` waits on the result
+condition before closing, bounded by its configured timeout.
 
 ## Qualcomm comparison
 

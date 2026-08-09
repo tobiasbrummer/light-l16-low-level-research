@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Conservatively classify logs from the fixed Light L16 A1 wrapper."""
+"""Conservatively classify a bundle from the fixed Light L16 A1 wrapper."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import struct
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
 
-PASS_VERDICT = "CONTROL_PATH_PASS_UNVERIFIED_PIXELS"
+PASS_VERDICT = "CONTROL_PATH_PASS_LRI_FRAMING_ONLY"
 FAILED_VERDICT = "CONTROL_PATH_FAILED"
 WRAPPER_FAILED_VERDICT = "WRAPPER_FAILED"
 INCOMPLETE_VERDICT = "INCOMPLETE_EVIDENCE"
@@ -21,6 +23,9 @@ PREFLIGHT_VERDICT = "PREFLIGHT_STOPPED"
 
 _KEY_VALUE = re.compile(r"^([a-z][a-z0-9_]*)=(.*)$")
 _MANUAL_ZERO = re.compile(r"(?:^|\s)(?:0|0x0)$", re.IGNORECASE)
+_REMOTE_LRI = re.compile(r"^/sdcard/DCIM/camera/(RDI_[0-9]{8}_[0-9]{6}_[0-9]{3}\.lri)$")
+_LRI_HEADER = struct.Struct("<4sQQIB7x")
+_LRI_MAGIC = b"LELR"
 
 _LCC_FAILURE_PATTERNS = (
     (
@@ -198,6 +203,53 @@ def _short_log_line(line: str, maximum: int = 240) -> str:
     return compact[: maximum - 3] + "..."
 
 
+def _sha1(path: Path) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def validate_lri_container(path: Path) -> tuple[int, str | None]:
+    """Validate only the public 32-byte LELR block framing.
+
+    This intentionally does not decode proprietary protobuf messages or judge
+    whether the raw samples are plausible.
+    """
+
+    size = path.stat().st_size
+    offset = 0
+    blocks = 0
+    with path.open("rb") as stream:
+        while offset < size:
+            remaining = size - offset
+            if remaining < _LRI_HEADER.size:
+                return blocks, f"trailing {remaining} bytes at offset {offset}"
+            stream.seek(offset)
+            raw_header = stream.read(_LRI_HEADER.size)
+            if len(raw_header) != _LRI_HEADER.size:
+                return blocks, f"short header read at offset {offset}"
+            magic, block_length, message_offset, message_length, _ = _LRI_HEADER.unpack(
+                raw_header
+            )
+            if magic != _LRI_MAGIC:
+                return blocks, f"bad magic at block {blocks} offset {offset}"
+            if block_length < _LRI_HEADER.size:
+                return blocks, f"invalid block length {block_length} at block {blocks}"
+            if block_length > remaining:
+                return blocks, f"block {blocks} extends beyond end of file"
+            if not (_LRI_HEADER.size <= message_offset <= block_length):
+                return blocks, f"invalid message offset at block {blocks}"
+            if message_length > block_length - message_offset:
+                return blocks, f"message extends beyond block {blocks}"
+            offset += block_length
+            blocks += 1
+    if blocks == 0:
+        return 0, "container has no blocks"
+    return blocks, None
+
+
 def _scan_lines(
     lines: Iterable[str],
     patterns: tuple[tuple[str, re.Pattern[str]], ...],
@@ -228,7 +280,7 @@ def analyze_capture(root: Path) -> Analysis:
             2,
             "unknown",
             "unknown",
-            "not_available_no_pixel_artifact_requested",
+            "not_available_capture_bundle_incomplete",
             "not_in_capture_bundle",
             None,
             (Finding("INCOMPLETE", "result_missing", note),),
@@ -258,6 +310,7 @@ def analyze_capture(root: Path) -> Analysis:
         )
 
     findings: list[Finding] = []
+    pixel_validation = "not_available_capture_artifact_missing"
     missing_result_keys = [
         key
         for key in (
@@ -268,6 +321,10 @@ def analyze_capture(root: Path) -> Analysis:
             "manual_control_after",
             "lcc_process_after",
             "normal_reboot_required",
+            "lri_output_count",
+            "lri_output_path",
+            "lri_output_size",
+            "lri_output_sha1",
         )
         if key not in result
     ]
@@ -288,6 +345,7 @@ def analyze_capture(root: Path) -> Analysis:
         "cleanup_ok": "yes",
         "lcc_process_after": "no",
         "normal_reboot_required": "yes",
+        "lri_output_count": "1",
     }
     for key, expected in expected_values.items():
         actual = result.get(key)
@@ -359,9 +417,7 @@ def analyze_capture(root: Path) -> Analysis:
                 )
             ]
             findings.extend(
-                _scan_lines(
-                    review_lines, _DIAGNOSTIC_REVIEW_PATTERNS, level="REVIEW"
-                )
+                _scan_lines(review_lines, _DIAGNOSTIC_REVIEW_PATTERNS, level="REVIEW")
             )
 
     state_path = evidence / "state.after.txt"
@@ -379,9 +435,7 @@ def analyze_capture(root: Path) -> Analysis:
         for service in ("media", "lightsvr"):
             status = state.get(service)
             if status is None:
-                findings.append(
-                    Finding("INCOMPLETE", "state_service_missing", service)
-                )
+                findings.append(Finding("INCOMPLETE", "state_service_missing", service))
             elif status != "running":
                 findings.append(
                     Finding("FAIL", "state_service_not_running", f"{service}={status}")
@@ -397,13 +451,83 @@ def analyze_capture(root: Path) -> Analysis:
             )
         )
 
+    if result.get("lri_output_count") == "1":
+        remote_path = result.get("lri_output_path", "")
+        remote_match = _REMOTE_LRI.fullmatch(remote_path)
+        expected_size_text = result.get("lri_output_size", "")
+        expected_sha1 = result.get("lri_output_sha1", "")
+        if remote_match is None:
+            findings.append(
+                Finding("FAIL", "lri_remote_path_invalid", remote_path or "missing")
+            )
+        elif not expected_size_text.isdecimal():
+            findings.append(
+                Finding(
+                    "FAIL", "lri_reported_size_invalid", expected_size_text or "missing"
+                )
+            )
+        elif re.fullmatch(r"[0-9a-f]{40}", expected_sha1) is None:
+            findings.append(
+                Finding("FAIL", "lri_reported_sha1_invalid", expected_sha1 or "missing")
+            )
+        else:
+            local_lri = root / "pixels" / remote_match.group(1)
+            if not local_lri.is_file():
+                pixel_validation = "lri_reported_but_not_in_capture_bundle"
+                findings.append(
+                    Finding(
+                        "INCOMPLETE",
+                        "lri_artifact_not_pulled",
+                        str(local_lri),
+                    )
+                )
+            else:
+                actual_size = local_lri.stat().st_size
+                actual_sha1 = _sha1(local_lri)
+                expected_size = int(expected_size_text)
+                if actual_size != expected_size:
+                    pixel_validation = "lri_transfer_integrity_failed"
+                    findings.append(
+                        Finding(
+                            "INCOMPLETE",
+                            "lri_size_mismatch",
+                            f"device={expected_size} host={actual_size}",
+                        )
+                    )
+                elif actual_sha1 != expected_sha1:
+                    pixel_validation = "lri_transfer_integrity_failed"
+                    findings.append(
+                        Finding(
+                            "INCOMPLETE",
+                            "lri_sha1_mismatch",
+                            f"device={expected_sha1} host={actual_sha1}",
+                        )
+                    )
+                else:
+                    blocks, framing_error = validate_lri_container(local_lri)
+                    if framing_error is not None:
+                        pixel_validation = "lri_container_framing_invalid"
+                        findings.append(
+                            Finding("FAIL", "lri_container_invalid", framing_error)
+                        )
+                    else:
+                        pixel_validation = (
+                            "lri_transfer_and_container_framing_valid_"
+                            "protobuf_and_pixels_unverified"
+                        )
+                        findings.append(
+                            Finding(
+                                "NOTE",
+                                "lri_container_framing_valid",
+                                f"blocks={blocks} size={actual_size} sha1={actual_sha1}",
+                            )
+                        )
+
     if explicit_wrapper_failures:
         verdict, exit_code = WRAPPER_FAILED_VERDICT, 1
     elif any(finding.level == "FAIL" for finding in findings):
         verdict, exit_code = FAILED_VERDICT, 1
-    elif any(
-        finding.level in {"INCOMPLETE", "REVIEW"} for finding in findings
-    ):
+    elif any(finding.level in {"INCOMPLETE", "REVIEW"} for finding in findings):
         verdict, exit_code = INCOMPLETE_VERDICT, 2
     else:
         verdict, exit_code = PASS_VERDICT, 0
@@ -411,7 +535,7 @@ def analyze_capture(root: Path) -> Analysis:
             Finding(
                 "NOTE",
                 "scope_boundary",
-                "control path and immediate cleanup only; no persistent pixels were requested",
+                "LRI transfer and block framing only; module identity, protobuf content, and raw samples remain unverified",
             )
         )
         findings.append(
@@ -427,7 +551,7 @@ def analyze_capture(root: Path) -> Analysis:
         exit_code,
         attempted,
         wrapper_status,
-        "not_available_no_pixel_artifact_requested",
+        pixel_validation,
         "not_in_capture_bundle",
         str(evidence),
         tuple(findings),
@@ -454,7 +578,9 @@ def format_analysis(analysis: Analysis) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture_directory", type=Path)
-    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    parser.add_argument(
+        "--json", action="store_true", help="emit machine-readable JSON"
+    )
     args = parser.parse_args(argv)
 
     if not args.capture_directory.is_dir():

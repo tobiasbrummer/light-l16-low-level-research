@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import struct
 from pathlib import Path
 
 from tools.analyze_a1_capture import (
@@ -11,10 +13,11 @@ from tools.analyze_a1_capture import (
     analyze_capture,
     main,
     new_lines,
+    validate_lri_container,
 )
 
 
-PASS_RESULT = """\
+PASS_RESULT_BASE = """\
 mode=A1_FIXED_CAPTURE_ONCE
 capture_attempted=yes
 lcc_exit_status=0
@@ -23,14 +26,38 @@ lcc_process_after=no
 cleanup_ok=yes
 normal_reboot_required=yes
 workdir=/data/local/tmp/light_l16_a1_capture_run.1234
-final_reason=lcc_exit_zero_cleanup_verified_capture_not_yet_validated
+final_reason=lcc_exit_zero_lri_captured_cleanup_verified_content_not_validated
 final_status=PASS
 """
 
 
+def _valid_lri_bytes() -> bytes:
+    raw = b"raw-pixels"
+    message = b"protobuf"
+    message_offset = 32 + len(raw)
+    block_length = message_offset + len(message)
+    return (
+        struct.pack("<4sQQIB7x", b"LELR", block_length, message_offset, len(message), 0)
+        + raw
+        + message
+    )
+
+
 def _write_bundle(root: Path, *, lcc: str | None = None) -> Path:
     root.mkdir()
-    (root / "result.txt").write_text(PASS_RESULT, encoding="utf-8")
+    pixels = root / "pixels"
+    pixels.mkdir()
+    lri_name = "RDI_20260809_123456_789.lri"
+    lri_data = _valid_lri_bytes()
+    (pixels / lri_name).write_bytes(lri_data)
+    result = (
+        PASS_RESULT_BASE
+        + "lri_output_count=1\n"
+        + f"lri_output_path=/sdcard/DCIM/camera/{lri_name}\n"
+        + f"lri_output_size={len(lri_data)}\n"
+        + f"lri_output_sha1={hashlib.sha1(lri_data).hexdigest()}\n"
+    )
+    (root / "result.txt").write_text(result, encoding="utf-8")
     device = root / "device"
     device.mkdir()
     (device / "lcc.txt").write_text(
@@ -46,9 +73,7 @@ def _write_bundle(root: Path, *, lcc: str | None = None) -> Path:
     (device / "logcat.before.txt").write_text("old log\n", encoding="utf-8")
     (device / "logcat.after.txt").write_text("old log\n", encoding="utf-8")
     (device / "state.after.txt").write_text(
-        "manual_control=manual control mode is 0x0\n"
-        "media=running\n"
-        "lightsvr=running\n",
+        "manual_control=manual control mode is 0x0\nmedia=running\nlightsvr=running\n",
         encoding="utf-8",
     )
     (device / "camera.after_immediate.txt").write_text(
@@ -57,11 +82,15 @@ def _write_bundle(root: Path, *, lcc: str | None = None) -> Path:
     return root
 
 
-def test_complete_control_path_pass_keeps_pixel_boundary(tmp_path: Path) -> None:
+def test_complete_bundle_passes_lri_framing_but_keeps_content_boundary(
+    tmp_path: Path,
+) -> None:
     analysis = analyze_capture(_write_bundle(tmp_path / "capture"))
     assert analysis.verdict == PASS_VERDICT
     assert analysis.exit_code == 0
-    assert analysis.pixel_validation == "not_available_no_pixel_artifact_requested"
+    assert analysis.pixel_validation == (
+        "lri_transfer_and_container_framing_valid_protobuf_and_pixels_unverified"
+    )
     assert analysis.post_reboot_validation == "not_in_capture_bundle"
 
 
@@ -130,8 +159,7 @@ def test_ambiguous_new_camera_error_requires_review(tmp_path: Path) -> None:
     analysis = analyze_capture(root)
     assert analysis.verdict == INCOMPLETE_VERDICT
     assert any(
-        finding.code == "camera_stack_error_review"
-        for finding in analysis.findings
+        finding.code == "camera_stack_error_review" for finding in analysis.findings
     )
 
 
@@ -142,16 +170,53 @@ def test_zero_error_counter_does_not_downgrade(tmp_path: Path) -> None:
     assert analyze_capture(root).verdict == PASS_VERDICT
 
 
-def test_cli_emits_stable_verdict_and_exit_code(
-    tmp_path: Path, capsys
-) -> None:
+def test_cli_emits_stable_verdict_and_exit_code(tmp_path: Path, capsys) -> None:
     root = _write_bundle(tmp_path / "capture")
     assert main([str(root)]) == 0
     output = capsys.readouterr().out
     assert output.startswith(f"verdict={PASS_VERDICT}\n")
-    assert "pixel_validation=not_available_no_pixel_artifact_requested\n" in output
+    assert (
+        "pixel_validation=lri_transfer_and_container_framing_valid_"
+        "protobuf_and_pixels_unverified\n"
+    ) in output
     assert "post_reboot_validation=not_in_capture_bundle\n" in output
 
 
 def test_multiset_delta_handles_non_prefix_overlap() -> None:
     assert new_lines("a\nb\na\n", "b\na\nc\na\nd\n") == ["c", "d"]
+
+
+def test_missing_reported_lri_is_incomplete(tmp_path: Path) -> None:
+    root = _write_bundle(tmp_path / "capture")
+    next((root / "pixels").glob("*.lri")).unlink()
+    analysis = analyze_capture(root)
+    assert analysis.verdict == INCOMPLETE_VERDICT
+    assert analysis.pixel_validation == "lri_reported_but_not_in_capture_bundle"
+
+
+def test_invalid_lri_framing_fails_after_matching_transfer_hash(
+    tmp_path: Path,
+) -> None:
+    root = _write_bundle(tmp_path / "capture")
+    lri = next((root / "pixels").glob("*.lri"))
+    data = b"NOPE" + lri.read_bytes()[4:]
+    lri.write_bytes(data)
+    result = (root / "result.txt").read_text(encoding="utf-8")
+    result = result.replace(
+        next(
+            line for line in result.splitlines() if line.startswith("lri_output_sha1=")
+        ),
+        f"lri_output_sha1={hashlib.sha1(data).hexdigest()}",
+    )
+    (root / "result.txt").write_text(result, encoding="utf-8")
+    analysis = analyze_capture(root)
+    assert analysis.verdict == FAILED_VERDICT
+    assert analysis.pixel_validation == "lri_container_framing_invalid"
+
+
+def test_lri_validator_rejects_message_past_block_end(tmp_path: Path) -> None:
+    path = tmp_path / "bad.lri"
+    path.write_bytes(struct.pack("<4sQQIB7x", b"LELR", 32, 32, 1, 0))
+    blocks, error = validate_lri_container(path)
+    assert blocks == 0
+    assert error == "message extends beyond block 0"

@@ -11,7 +11,8 @@ This proves the userspace control interface. It does **not** prove that a manual
 single-module capture has completed successfully on the examined production
 camera. The repository provides mask tooling, a camera-read-only A1 preflight,
 a tightly fixed one-shot execution wrapper, and a conservative host-side log
-analyzer. The execution wrapper has not yet been run on the camera.
+analyzer. Static analysis now also identifies the HAL's automatic LRI writer;
+the execution wrapper has not yet been run on the camera.
 
 ## Relevant factory binary
 
@@ -90,6 +91,12 @@ modules. For A1, the statically derived positional part is therefore:
 02 00 00 11 F1 00
 ```
 
+`wf_parse_capture()` sets `n_burst=1` before parsing this ordinary flow. Only
+the separate burst workflow can replace it from an additional positional
+argument. The fixed `-f 1` command is therefore expected to generate one LRI,
+which is why the wrapper treats zero or multiple new files as a failed or
+ambiguous result.
+
 The relevant parameter options are `-e` for exposure, `-g` for gain, `-R` for
 resolution, and `-F` for frame rate. Each option accepts either one common
 value or one value per selected module. The capture parser also accepts an
@@ -117,6 +124,36 @@ fills. It is not gated by `-C`. For the three accepted resolutions, the command
 uses scale denominators 1, 2, and 4 respectively. The fixed A1 command already
 contains `-R 4160,3120`, so this resolution configuration is present even
 though `-C` is absent.
+
+### Automatic LRI output in the HAL
+
+Pixel persistence is real, but it is independent of `-C`. In the identified
+`camera.msm8996.so`, the capture interface follows this chain:
+
+```text
+lcc wf_run_capture -> exported start_capture
+  -> LccInterface::startCapture
+  -> request thread submits the special output stream
+  -> LccInterface::processCaptureResult
+  -> LccInterface::writeFile
+```
+
+The special stream has format value `0x30`. When a returned output buffer uses
+that stream, `processCaptureResult()` calls `writeFile()`. The writer reads the
+file descriptors and lengths supplied in the returned descriptor buffer,
+maps each read-only, and appends each complete buffer to one file. Its filename
+builder produces:
+
+```text
+/sdcard/DCIM/camera/RDI_YYYYMMDD_HHMMSS_mmm.lri
+```
+
+`closeCamera()` waits for the result condition before closing the HAL, subject
+to its timeout. Thus the fixed `lcc` command is statically expected to create
+an LRI automatically; no output option is needed. This is stronger than merely
+finding an `.lri` string, because the writer is reached from the capture-result
+callback and the factory workflow calls the exported start and close functions.
+It remains static evidence until the first live run produces a file.
 
 ## Reference values from a normal A1 capture
 
@@ -157,11 +194,11 @@ This remains a statically and metadata-derived candidate. It has not been
 executed on the camera.
 
 The first execution deliberately omits `-C`: its small CCB-response files add
-no pixel evidence and the recovered factory MIPI test does not use it. The
-first hardware test validates only the single-module control and capture path
-through `lcc`; this command contains no known request for an LRI or persistent
-raw image. Finding and validating a genuine pixel-output path is a separate
-later test.
+no pixel evidence and the recovered factory MIPI test does not use it. The HAL
+is nevertheless expected to write the timestamped LRI above. The first hardware
+test can therefore capture the control-path diagnostics and the generated LRI
+in the same bounded attempt. Container framing and transfer integrity still do
+not establish that the file contains exactly A1 or plausible raw samples.
 
 ## Why the first live call needs a wrapper
 
@@ -198,7 +235,7 @@ or parameters. Before it can reach `lcc`, it requires all of the following:
 - the exact one-use arming value
   `A1_CAPTURE_2609592NS_GAIN_1.0_ONCE`, which it immediately deletes;
 - UID 0 through the self-clearing `fihop` runner and the exact known build,
-  kernel, SELinux, ASIC firmware, `lcc` size, and `lcc` SHA-1;
+  kernel, SELinux, ASIC firmware, `lcc` identity, and camera-HAL identity;
 - normal boot with `media` and `lightsvr` running, `ro.light.aos=1`, no special
   LCC mode, stopped `fwupgrade`, and no existing `lcc` process;
 - `manual_control=0`, no active CameraService client, UDP port 5000 unused, and
@@ -212,6 +249,14 @@ checks that no `lcc` process or CameraService client remains, captures bounded
 before/after logs, and deletes the executable copy. It does not run
 `prog_app_p2`, reset an ASIC, start `fwupgrade`, touch a block device, or invoke
 raw focus, mirror, firmware, or calibration controls.
+
+Before invoking `lcc`, the wrapper snapshots existing HAL-generated
+`RDI_*.lri` paths without changing them. After `lcc` returns and immediate
+cleanup passes, it requires exactly one new timestamp-shaped path, records its
+size and SHA-1, and leaves the device copy intact. The host pulls that file to
+the capture bundle before requesting the mandatory reboot and verifies the
+same size and SHA-1 locally. An absent or ambiguous new artifact prevents a
+`PASS` result.
 
 Because a timeout can kill `lcc` before its own `close_camera`, the wrapper
 marks a normal reboot as mandatory after every attempt that reaches `lcc`, even
@@ -262,7 +307,9 @@ properties before triggering once, and polls for a completed result for at most
 diagnostic directory under `output/a1-capture-<UTC>/` and requests a normal
 `adb reboot` whenever the device reports `capture_attempted=yes` or no complete
 result is available. A preflight failure before `lcc` does not cause an
-automatic reboot.
+automatic reboot. When the device reports one new HAL-generated LRI, the host
+also pulls it under `pixels/`, verifies its byte count and SHA-1 against the
+device result, and deliberately leaves the original file on the camera.
 
 The pulled bundle can then be classified locally without reconnecting to the
 camera:
@@ -272,21 +319,24 @@ python3 tools/analyze_a1_capture.py output/a1-capture-<UTC>
 ```
 
 The analyzer checks the completed wrapper result, immediate cleanup state,
-CameraService client list, positive `lcc` lifecycle messages, and newly added
-dmesg/logcat faults. It subtracts identical lines from the bounded before
+CameraService client list, positive `lcc` lifecycle messages, newly added
+dmesg/logcat faults, the host copy's size and SHA-1, and the public 32-byte
+`LELR` block framing. It subtracts identical lines from the bounded before
 snapshot so an already-existing message is not reported as a new capture
 failure. Its verdicts and exit codes are:
 
 | Verdict | Exit | Meaning |
 | --- | ---: | --- |
-| `CONTROL_PATH_PASS_UNVERIFIED_PIXELS` | 0 | `lcc` lifecycle, exit, immediate cleanup, and new diagnostics are consistent with a successful control-path attempt |
+| `CONTROL_PATH_PASS_LRI_FRAMING_ONLY` | 0 | control path and cleanup passed; the copied LRI matches the device hash and has a completely framed LELR block stream |
 | `WRAPPER_FAILED` / `CONTROL_PATH_FAILED` | 1 | an explicit wrapper postcondition or diagnostic error failed |
 | `INCOMPLETE_EVIDENCE` / `PREFLIGHT_STOPPED` | 2 | no capture was attempted or required evidence is missing |
 
 Even the pass verdict reports
-`pixel_validation=not_available_no_pixel_artifact_requested` and
+`pixel_validation=lri_transfer_and_container_framing_valid_protobuf_and_pixels_unverified`
+and
 `post_reboot_validation=not_in_capture_bundle`. It cannot replace the live
-normal-boot checks below.
+normal-boot checks below, nor does it decode the LightHeader to prove that only
+A1 fired or test whether its raw samples are plausible.
 
 After the camera returns, verify the normal-boot postcondition before opening
 the camera application:
@@ -303,10 +353,12 @@ properties. If ADB disappears before the host can request its reboot, do not
 retrigger `fihop`; perform one normal hardware restart instead.
 
 `final_status=PASS` has a deliberately narrow meaning: the exact `lcc` process
-returned zero, the gate and process checks passed, and the host requested the
-planned reboot. It is not yet proof that A1 delivered valid pixels. The pulled
-`lcc.txt`, dmesg, logcat, and CameraService snapshots must pass the analyzer
-and be reviewed before any genuine pixel-output or multi-module test.
+returned zero, exactly one new HAL LRI was found and hashed, and the gate and
+process checks passed. The host additionally verifies the copied bytes before
+requesting the planned reboot. This is still not proof that A1 delivered valid
+pixels: the LRI's decoded module list, exposure metadata, dimensions, raw
+format, and sample statistics must be checked separately after the camera has
+rebooted normally.
 
 ## Confirmed dry-run result
 

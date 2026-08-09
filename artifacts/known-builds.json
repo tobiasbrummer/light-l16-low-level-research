@@ -23,6 +23,12 @@
           "sha1": "01b4ea363174240bee5a3005ba9c39f6cb529e6f",
           "size": 501352
         },
+        "system/lib/hw/camera.msm8996.so": {
+          "sha256": "5beffc664583b7dd03de4be9a30ec2fec971805abc253533254fad897b669fc6",
+          "sha1": "016602174e0635e79cda5566d5e850c1294a9300",
+          "gnu_build_id": "181bf730b4bbb8d37b17998a2e9f6d63",
+          "size": 1338100
+        },
         "system/etc/fihop.sh": {
           "sha256": "6550cce118492e43c5285d469f7dc383e4d6c14c7cf766de1c82cb57fbaebe4f"
         }

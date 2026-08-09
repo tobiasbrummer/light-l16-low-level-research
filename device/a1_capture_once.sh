@@ -11,7 +11,9 @@ ARM_FILE=/data/local/tmp/light_l16_a1_capture.armed
 ARM_VALUE=A1_CAPTURE_2609592NS_GAIN_1.0_ONCE
 WORK_PREFIX=/data/local/tmp/light_l16_a1_capture_run
 LCC_SOURCE=/system/etc/lcc
+HAL_SOURCE=/system/lib/hw/camera.msm8996.so
 MANUAL_CONTROL=/sys/class/light_ccb/common/manual_control
+LRI_DIR=/sdcard/DCIM/camera
 EXPECTED_BUILD=00WW_1_351
 EXPECTED_BUILD_TYPE=user
 EXPECTED_DEBUGGABLE=0
@@ -20,6 +22,8 @@ EXPECTED_SELINUX=Permissive
 EXPECTED_ASIC_FW=0076D11B
 EXPECTED_LCC_SIZE=501352
 EXPECTED_LCC_SHA1=01b4ea363174240bee5a3005ba9c39f6cb529e6f
+EXPECTED_HAL_SIZE=1338100
+EXPECTED_HAL_SHA1=016602174e0635e79cda5566d5e850c1294a9300
 MIN_DATA_FREE_KB=262144
 
 CAPTURE_ATTEMPTED=no
@@ -30,6 +34,10 @@ NORMAL_REBOOT_REQUIRED=no
 CLEANUP_OK=no
 WORKDIR=
 LCC_COPY=
+LRI_OUTPUT_COUNT=unknown
+LRI_OUTPUT_PATH=
+LRI_OUTPUT_SIZE=unknown
+LRI_OUTPUT_SHA1=
 
 clear_runner() {
     setprop persist.sys.fihop 0
@@ -64,6 +72,33 @@ camera_clients_none() {
             | /system/bin/toybox sed -n '2p'
     )
     [ "$ACTIVE_CLIENTS" = "[]" ]
+}
+
+snapshot_lri_paths() {
+    TARGET=$1
+    : > "$TARGET" || return 1
+    for FILE in "$LRI_DIR"/RDI_*.lri; do
+        [ -f "$FILE" ] || continue
+        printf '%s\n' "$FILE" >> "$TARGET" || return 1
+    done
+}
+
+path_in_snapshot() {
+    CANDIDATE=$1
+    SNAPSHOT=$2
+    while IFS= read -r EXISTING; do
+        [ "$CANDIDATE" = "$EXISTING" ] && return 0
+    done < "$SNAPSHOT"
+    return 1
+}
+
+valid_generated_lri_path() {
+    case "$1" in
+        "$LRI_DIR"/RDI_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9].lri)
+            return 0
+            ;;
+        *) return 1 ;;
+    esac
 }
 
 capture_diagnostics() {
@@ -138,6 +173,10 @@ finish() {
     printf 'lcc_process_after=%s\n' "$LCC_REMAINS"
     printf 'cleanup_ok=%s\n' "$CLEANUP_OK"
     printf 'normal_reboot_required=%s\n' "$NORMAL_REBOOT_REQUIRED"
+    printf 'lri_output_count=%s\n' "$LRI_OUTPUT_COUNT"
+    printf 'lri_output_path=%s\n' "$LRI_OUTPUT_PATH"
+    printf 'lri_output_size=%s\n' "$LRI_OUTPUT_SIZE"
+    printf 'lri_output_sha1=%s\n' "$LRI_OUTPUT_SHA1"
     printf 'workdir=%s\n' "$WORKDIR"
 
     if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
@@ -242,6 +281,13 @@ LCC_SHA1=$(/system/bin/toybox sha1sum "$LCC_SOURCE") || fail cannot_hash_lcc
 LCC_SHA1=${LCC_SHA1%% *}
 printf 'lcc_size=%s lcc_sha1=%s\n' "$LCC_SIZE" "$LCC_SHA1"
 [ "$LCC_SHA1" = "$EXPECTED_LCC_SHA1" ] || fail unexpected_lcc_hash
+[ -r "$HAL_SOURCE" ] || fail camera_hal_missing
+HAL_SIZE=$(/system/bin/toybox wc -c < "$HAL_SOURCE") || fail cannot_size_camera_hal
+[ "$HAL_SIZE" = "$EXPECTED_HAL_SIZE" ] || fail unexpected_camera_hal_size
+HAL_SHA1=$(/system/bin/toybox sha1sum "$HAL_SOURCE") || fail cannot_hash_camera_hal
+HAL_SHA1=${HAL_SHA1%% *}
+printf 'camera_hal_size=%s camera_hal_sha1=%s\n' "$HAL_SIZE" "$HAL_SHA1"
+[ "$HAL_SHA1" = "$EXPECTED_HAL_SHA1" ] || fail unexpected_camera_hal_hash
 [ -x /system/bin/timeout ] || fail timeout_missing
 
 [ -r "$MANUAL_CONTROL" ] || fail manual_control_missing
@@ -269,6 +315,10 @@ esac
 printf 'data_free_kb=%s\n' "$DATA_FREE_KB"
 [ "$DATA_FREE_KB" -ge "$MIN_DATA_FREE_KB" ] || fail insufficient_data_free_space
 
+[ -d "$LRI_DIR" ] || fail lri_output_directory_missing
+[ -w "$LRI_DIR" ] || fail lri_output_directory_not_writable
+snapshot_lri_paths "$WORKDIR/lri.before.txt" || fail cannot_snapshot_lri_before
+
 capture_diagnostics before
 camera_clients_none "$WORKDIR/camera.before.txt" || \
     fail camera_client_present_or_state_unknown
@@ -287,7 +337,8 @@ printf '%s\n' \
     'executed_argv=<verified-lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 -R 4160,3120 -e 2609592 -g 1.0'
 printf '%s\n' 'outer_timeout=TERM_after_30s_KILL_after_5s'
 printf '%s\n' 'lcc_response_files=disabled'
-printf '%s\n' 'persistent_pixel_output=not_requested_by_this_command'
+printf '%s\n' 'hal_lri_output=expected_automatically'
+printf 'hal_lri_directory=%s\n' "$LRI_DIR"
 
 CAPTURE_ATTEMPTED=yes
 NORMAL_REBOOT_REQUIRED=yes
@@ -313,7 +364,43 @@ printf 'camera_clients_after_immediate=none\n'
 [ "$(getprop init.svc.media)" = "running" ] || fail media_stopped_after_capture
 [ "$(getprop init.svc.lightsvr)" = "running" ] || fail lightsvr_stopped_after_capture
 
+snapshot_lri_paths "$WORKDIR/lri.after.txt" || fail cannot_snapshot_lri_after
+: > "$WORKDIR/lri.new.txt" || fail cannot_create_lri_delta
+while IFS= read -r FILE; do
+    [ -n "$FILE" ] || continue
+    if ! path_in_snapshot "$FILE" "$WORKDIR/lri.before.txt"; then
+        printf '%s\n' "$FILE" >> "$WORKDIR/lri.new.txt" || \
+            fail cannot_record_new_lri
+    fi
+done < "$WORKDIR/lri.after.txt"
+LRI_OUTPUT_COUNT=$(/system/bin/toybox wc -l < "$WORKDIR/lri.new.txt") || \
+    fail cannot_count_new_lri
+case "$LRI_OUTPUT_COUNT" in
+    ""|*[!0-9]*) fail invalid_new_lri_count ;;
+esac
+printf 'new_lri_count=%s\n' "$LRI_OUTPUT_COUNT"
+
+if [ "$LRI_OUTPUT_COUNT" = "1" ]; then
+    LRI_OUTPUT_PATH=$(/system/bin/toybox sed -n '1p' "$WORKDIR/lri.new.txt") || \
+        fail cannot_read_new_lri_path
+    valid_generated_lri_path "$LRI_OUTPUT_PATH" || fail unexpected_new_lri_path
+    [ -r "$LRI_OUTPUT_PATH" ] || fail new_lri_not_readable
+    LRI_OUTPUT_SIZE=$(/system/bin/toybox wc -c < "$LRI_OUTPUT_PATH") || \
+        fail cannot_size_new_lri
+    case "$LRI_OUTPUT_SIZE" in
+        ""|*[!0-9]*) fail invalid_new_lri_size ;;
+    esac
+    [ "$LRI_OUTPUT_SIZE" -ge 32 ] || fail new_lri_too_small
+    LRI_OUTPUT_SHA1=$(/system/bin/toybox sha1sum "$LRI_OUTPUT_PATH") || \
+        fail cannot_hash_new_lri
+    LRI_OUTPUT_SHA1=${LRI_OUTPUT_SHA1%% *}
+    printf 'new_lri_path=%s\n' "$LRI_OUTPUT_PATH"
+    printf 'new_lri_size=%s\n' "$LRI_OUTPUT_SIZE"
+    printf 'new_lri_sha1=%s\n' "$LRI_OUTPUT_SHA1"
+fi
+
 [ "$LCC_STATUS" = "0" ] || fail lcc_nonzero_or_timeout
+[ "$LRI_OUTPUT_COUNT" = "1" ] || fail lri_artifact_missing_or_ambiguous
 FINAL_STATUS=PASS
-FINAL_REASON=lcc_exit_zero_cleanup_verified_capture_not_yet_validated
+FINAL_REASON=lcc_exit_zero_lri_captured_cleanup_verified_content_not_validated
 exit 0

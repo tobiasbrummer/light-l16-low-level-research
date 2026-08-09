@@ -24,11 +24,13 @@ The following results are confirmed for one production Light L16 running build
   and cleanup checks without invoking `lcc` or issuing a capture request.
 - A separately armed, fixed-parameter A1 wrapper now bounds `lcc` with an outer
   timeout, repeats `manual_control` cleanup, collects logs, removes its temporary
-  executable, and requires a normal reboot after every attempted capture. It
+  executable, identifies the HAL-generated timestamped LRI without touching
+  older files, and requires a normal reboot after every attempted capture. It
   has not yet been executed on the camera.
 - A host-only analyzer conservatively separates wrapper failure, new camera or
-  kernel diagnostics, incomplete evidence, and a control-path pass. It never
-  upgrades that result to validated pixels or a verified post-reboot state.
+  kernel diagnostics, incomplete evidence, and a control-path pass. It verifies
+  the LRI transfer hash and public LELR framing but never upgrades that result
+  to decoded, plausible pixels or a verified post-reboot state.
 
 This repository does **not** claim a successful manual single-module capture.
 The factory `lcc` path, its module mask, the A1 reference parameters, and the

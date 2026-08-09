@@ -31,6 +31,69 @@ REMOTE_FILES_CLEARED=no
 TRIGGER_SENT=no
 REBOOT_SENT=no
 
+pull_lri_artifact() {
+    RESULT_FILE=$1
+    REMOTE_LRI_COUNT=$(sed -n 's/^lri_output_count=//p' "$RESULT_FILE" | tail -n 1)
+    if [ "$REMOTE_LRI_COUNT" != "1" ]; then
+        if [ "$FINAL_STATUS" = "PASS" ]; then
+            printf 'PASS result did not declare exactly one LRI\n' >&2
+            return 1
+        fi
+        return 0
+    fi
+
+    REMOTE_LRI=$(sed -n 's/^lri_output_path=//p' "$RESULT_FILE" | tail -n 1)
+    REMOTE_LRI_SIZE=$(sed -n 's/^lri_output_size=//p' "$RESULT_FILE" | tail -n 1)
+    REMOTE_LRI_SHA1=$(sed -n 's/^lri_output_sha1=//p' "$RESULT_FILE" | tail -n 1)
+    if ! printf '%s\n' "$REMOTE_LRI" | \
+        grep -Eq '^/sdcard/DCIM/camera/RDI_[0-9]{8}_[0-9]{6}_[0-9]{3}\.lri$'
+    then
+        printf 'refusing unexpected LRI path: %s\n' "$REMOTE_LRI" >&2
+        return 1
+    fi
+    case "$REMOTE_LRI_SIZE" in
+        ""|*[!0-9]*)
+            printf 'invalid device LRI size: %s\n' "$REMOTE_LRI_SIZE" >&2
+            return 1
+            ;;
+    esac
+    if [ "$REMOTE_LRI_SIZE" -lt 32 ]; then
+        printf 'device LRI is too small: %s bytes\n' "$REMOTE_LRI_SIZE" >&2
+        return 1
+    fi
+    if ! printf '%s\n' "$REMOTE_LRI_SHA1" | grep -Eq '^[0-9a-f]{40}$'; then
+        printf 'invalid device LRI SHA-1: %s\n' "$REMOTE_LRI_SHA1" >&2
+        return 1
+    fi
+
+    PIXEL_DIR="$HOST_OUTPUT/pixels"
+    mkdir -p "$PIXEL_DIR"
+    LRI_NAME=${REMOTE_LRI##*/}
+    LOCAL_LRI="$PIXEL_DIR/$LRI_NAME"
+    "$ADB" pull "$REMOTE_LRI" "$LOCAL_LRI" >/dev/null
+    LOCAL_LRI_SIZE=$(wc -c < "$LOCAL_LRI")
+    LOCAL_LRI_SHA1=$(sha1sum "$LOCAL_LRI")
+    LOCAL_LRI_SHA1=${LOCAL_LRI_SHA1%% *}
+    [ "$LOCAL_LRI_SIZE" = "$REMOTE_LRI_SIZE" ] || {
+        printf 'LRI size mismatch: device=%s host=%s\n' \
+            "$REMOTE_LRI_SIZE" "$LOCAL_LRI_SIZE" >&2
+        return 1
+    }
+    [ "$LOCAL_LRI_SHA1" = "$REMOTE_LRI_SHA1" ] || {
+        printf 'LRI SHA-1 mismatch: device=%s host=%s\n' \
+            "$REMOTE_LRI_SHA1" "$LOCAL_LRI_SHA1" >&2
+        return 1
+    }
+    {
+        printf 'remote_path=%s\n' "$REMOTE_LRI"
+        printf 'local_file=%s\n' "$LRI_NAME"
+        printf 'size=%s\n' "$LOCAL_LRI_SIZE"
+        printf 'sha1=%s\n' "$LOCAL_LRI_SHA1"
+        printf 'remote_file_retained=yes\n'
+    } > "$PIXEL_DIR/manifest.txt"
+    printf 'LRI copied with matching size and SHA-1: %s\n' "$LOCAL_LRI" >&2
+}
+
 clear_properties() {
     "$ADB" shell \
         'setprop persist.sys.fihop 0; setprop persist.sys.fihop1 ""; setprop persist.sys.fihop2 ""; setprop persist.sys.fihop3 ""; setprop persist.sys.fihop4 ""; setprop persist.sys.fihop5 ""' \
@@ -174,6 +237,9 @@ if [ "$RESULT_SEEN" = "yes" ]; then
             printf 'refusing unexpected device workdir: %s\n' "$DEVICE_WORKDIR" >&2
             ;;
     esac
+    if [ "$CAPTURE_ATTEMPTED" = "yes" ]; then
+        pull_lri_artifact "$HOST_OUTPUT/result.txt"
+    fi
     RESULT_PARSED=yes
 else
     printf 'no result after 90 seconds; capture state is unknown\n' >&2
