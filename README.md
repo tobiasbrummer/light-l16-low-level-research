@@ -31,6 +31,20 @@ a separate hardware test with additional cleanup requirements.
 - [Temporary root runner](docs/temporary-root.md)
 - [Reproducing the offline analysis](docs/reproduction.md)
 - [Security policy and device-safety boundary](SECURITY.md)
+- [Contributors and AI-assistance disclosure](CONTRIBUTORS.md)
+
+## Authorship and AI assistance
+
+Tobias Brummer directed the research, supplied and controlled the examined
+device and artifacts, made the safety and publication decisions, and maintains
+this repository. OpenAI Codex provided substantial AI assistance with the
+analysis workflow, binary cross-checks, documentation, clean-room interface
+definitions, scripts, tests, and release preparation.
+
+The technical claims were checked against identified local artifacts,
+instruction listings, hashes, and reproducible tests. AI assistance does not
+imply endorsement of this project by OpenAI. See
+[`CONTRIBUTORS.md`](CONTRIBUTORS.md) for the detailed attribution boundary.
 
 ## Repository boundary
 
