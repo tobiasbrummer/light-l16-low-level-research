@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Conservatively classify a bundle from the fixed Light L16 A1 wrapper."""
+"""Conservatively classify a bundle from a fixed Light L16 capture wrapper."""
 
 from __future__ import annotations
 
@@ -266,7 +266,7 @@ def _scan_lines(
 
 
 def analyze_capture(root: Path) -> Analysis:
-    """Analyze one ``output/a1-capture-<UTC>`` directory."""
+    """Analyze one fixed-profile capture bundle."""
 
     root = root.resolve()
     result_path = root / "result.txt"

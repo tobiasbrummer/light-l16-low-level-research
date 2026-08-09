@@ -78,12 +78,19 @@ def test_a1_dry_run_is_syntax_valid_and_cannot_capture() -> None:
         assert forbidden not in text
 
 
-def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
+def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     payload = ROOT / "device" / "a1_capture_once.sh"
     text = payload.read_text(encoding="utf-8")
     shell = shutil.which("sh")
     if shell is not None:
         subprocess.run([shell, "-n", str(payload)], check=True)
+
+    control_doc = (ROOT / "docs" / "lcc-control.md").read_text(encoding="utf-8")
+    assert (
+        f"current {len(payload.read_bytes()):,}-byte dual-profile payload"
+        in control_doc
+    )
+    assert hashlib.sha1(payload.read_bytes()).hexdigest() in control_doc
 
     clear = "setprop persist.sys.fihop 0"
     armed = '[ "$ARMED" = "$ARM_VALUE" ]'
@@ -91,9 +98,29 @@ def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
     assert text.index(clear) < text.index(': > "$OUT"')
     assert text.index(armed) < text.index(attempted)
     assert 'rm -f "$ARM_FILE"' in text
-    assert '/system/bin/timeout -k 5s 30s "$LCC_COPY"' in text
-    assert "-m 0 -s 0 -f 1 02 00 00 11 F1 00" in text
-    assert "-R 4160,3120 -e 20000000 -g 1.0" in text
+    assert "/data/local/tmp/light_l16_a1_capture_once.sh" in text
+    assert "/data/local/tmp/light_l16_all16_capture_once.sh" in text
+    assert "ARM_VALUE=A1_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    assert "ARM_VALUE=ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    assert "MODE=A1_FIXED_CAPTURE_20MS_ONCE" in text
+    assert "MODE=ALL16_FIXED_CAPTURE_20MS_ONCE" in text
+    assert "MASK0=02\n        MASK1=00\n        MASK2=00" in text
+    assert "MASK0=FE\n        MASK1=FF\n        MASK2=01" in text
+    assert "EXPOSURE_NS=20000000" in text
+    assert "GAIN=1.0" in text
+    assert "TUPLE0=11\nTUPLE1=F1\nTUPLE2=00" in text
+    assert "CAPTURE_TIMEOUT_SECONDS=30" in text
+    assert "CAPTURE_TIMEOUT_SECONDS=60" in text
+    assert "MIN_DATA_FREE_KB=262144" in text
+    assert "MIN_DATA_FREE_KB=1048576" in text
+    assert "ALLOW_CLEAN_NO_REBOOT=yes" in text
+    assert "ALLOW_CLEAN_NO_REBOOT=no" in text
+    assert (
+        '/system/bin/timeout -k 5s "${CAPTURE_TIMEOUT_SECONDS}s" "$LCC_COPY"'
+        in text
+    )
+    assert '-m 0 -s 0 -f 1 "$MASK0" "$MASK1" "$MASK2"' in text
+    assert '-R 4160,3120 -e "$EXPOSURE_NS" -g "$GAIN"' in text
     assert " -F " not in text
     assert " -C " not in text
     assert "lcc_response_files=disabled" in text
@@ -123,7 +150,7 @@ def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
         assert forbidden not in text
 
 
-def test_host_capture_supervisor_requires_confirmation_and_reboots_only_on_failure(
+def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
     tmp_path: Path,
 ) -> None:
     supervisor = ROOT / "host" / "run_a1_capture_once.sh"
@@ -171,6 +198,16 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots_only_on_failu
                     "ro.product.name": "LFC_0002_FIH01",
                 }.get(name, "")
 
+            profile = os.environ.get("FAKE_PROFILE", "a1")
+            if profile == "all16":
+                mode = "ALL16_FIXED_CAPTURE_20MS_ONCE"
+                workdir = "/data/local/tmp/light_l16_all16_capture_run.1234"
+                arm_value = "ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE"
+            else:
+                mode = "A1_FIXED_CAPTURE_20MS_ONCE"
+                workdir = "/data/local/tmp/light_l16_a1_capture_run.1234"
+                arm_value = "A1_CAPTURE_20000000NS_GAIN_1.0_ONCE"
+
             capture_attempted = os.environ.get("FAKE_CAPTURE_ATTEMPTED", "yes")
             final_status = os.environ.get("FAKE_FINAL_STATUS", "PASS")
             cleanup_ok = os.environ.get("FAKE_CLEANUP_OK", "yes")
@@ -180,8 +217,14 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots_only_on_failu
                 + b"protobuf"
             )
             pixel_sha1 = hashlib.sha1(pixel).hexdigest()
+            reboot_required = (
+                "yes"
+                if capture_attempted == "yes"
+                and (profile == "all16" or final_status != "PASS")
+                else "no"
+            )
             result = (
-                "mode=A1_FIXED_CAPTURE_20MS_ONCE\\n"
+                f"mode={mode}\\n"
                 f"capture_attempted={capture_attempted}\\n"
                 "lcc_exit_status=0\\n"
                 "manual_control_after=manual_control mode is 0x0\\n"
@@ -190,8 +233,8 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots_only_on_failu
                 "settled_camera_clients=none\\n"
                 "media_after=running\\n"
                 "lightsvr_after=running\\n"
-                f"normal_reboot_required={'no' if capture_attempted == 'yes' and final_status == 'PASS' else 'yes' if capture_attempted == 'yes' else 'no'}\\n"
-                "workdir=/data/local/tmp/light_l16_a1_capture_run.1234\\n"
+                f"normal_reboot_required={reboot_required}\\n"
+                f"workdir={workdir}\\n"
                 "lri_output_count=1\\n"
                 "lri_output_path=/sdcard/DCIM/camera/RDI_20260809_123456_789.lri\\n"
                 f"lri_output_size={len(pixel)}\\n"
@@ -213,7 +256,9 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots_only_on_failu
                 raise SystemExit(0)
             if args[0] == "pull":
                 source, target = args[1], Path(args[2])
-                if source.endswith("light_l16_a1_capture.result"):
+                if source.endswith(
+                    ("light_l16_a1_capture.result", "light_l16_all16_capture.result")
+                ):
                     if os.environ.get("FAKE_PULL_RESULT_FAIL") == "1":
                         raise SystemExit(1)
                     if (
@@ -237,8 +282,10 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots_only_on_failu
             if "sha1sum" in command:
                 print(os.environ["EXPECTED_PAYLOAD_SHA1"] + "  payload")
                 raise SystemExit(0)
-            if command.startswith("cat '/data/local/tmp/light_l16_a1_capture.armed'"):
-                print("A1_CAPTURE_20000000NS_GAIN_1.0_ONCE")
+            if command.startswith("cat '/data/local/tmp/light_l16_") and command.endswith(
+                "_capture.armed'"
+            ):
+                print(arm_value)
                 raise SystemExit(0)
             if command.startswith("getprop "):
                 print(get_prop(shlex.split(command)[1]))
@@ -324,6 +371,44 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots_only_on_failu
     pixels = list((tmp_path / "output").glob("*/pixels/*.lri"))
     assert len(pixels) == 1
     assert pixels[0].read_bytes().startswith(b"LELR")
+
+    all16_state = tmp_path / "fake-adb-all16-state"
+    all16_state.mkdir()
+    all16_env = env.copy()
+    all16_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "all16-output"),
+            "FAKE_ADB_STATE": str(all16_state),
+            "FAKE_PROFILE": "all16",
+        }
+    )
+    all16 = subprocess.run(
+        [
+            shell,
+            str(supervisor),
+            "--execute-fixed-all16-20ms-once-and-reboot",
+        ],
+        cwd=ROOT,
+        env=all16_env,
+        capture_output=True,
+        text=True,
+    )
+    assert all16.returncode == 0, all16.stderr
+    assert (all16_state / "triggered").exists()
+    assert (all16_state / "rebooted").exists()
+    assert "mandatory normal reboot" in all16.stderr
+    all16_results = list((tmp_path / "all16-output").glob("*/result.txt"))
+    assert len(all16_results) == 1
+    assert "mode=ALL16_FIXED_CAPTURE_20MS_ONCE" in all16_results[0].read_text(
+        encoding="utf-8"
+    )
+
+    all16_wrapper = ROOT / "host" / "run_all16_capture_once.sh"
+    subprocess.run([shell, "-n", str(all16_wrapper)], check=True)
+    wrapper_without_confirmation = subprocess.run(
+        [shell, str(all16_wrapper)], capture_output=True, text=True
+    )
+    assert wrapper_without_confirmation.returncode == 2
 
     ambiguous_state = tmp_path / "fake-adb-ambiguous-trigger-state"
     ambiguous_state.mkdir()

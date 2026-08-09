@@ -1,31 +1,55 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
-# Host supervisor for the fixed 20 ms A1 device payload. A fully verified clean
-# return stays up; every failure or ambiguous post-trigger state reboots.
+# Host supervisor for the fixed 20 ms device payload. A fully verified clean A1
+# return stays up. Every all-16 attempt and every failure or ambiguous
+# post-trigger state reboot.
 set -eu
 
-CONFIRM=--execute-fixed-a1-20ms-once-with-failure-reboot
-if [ "$#" -ne 1 ] || [ "$1" != "$CONFIRM" ]; then
-    printf 'usage: %s %s\n' "$0" "$CONFIRM" >&2
-    printf 'This performs one real 20 ms A1 lcc attempt; any unsafe outcome reboots.\n' >&2
-    exit 2
-fi
+CONFIRM_A1=--execute-fixed-a1-20ms-once-with-failure-reboot
+CONFIRM_ALL16=--execute-fixed-all16-20ms-once-and-reboot
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(dirname "$SCRIPT_DIR")
 PAYLOAD="$REPO_ROOT/device/a1_capture_once.sh"
 ADB=${LIGHT_L16_ADB:-adb}
-REMOTE_PAYLOAD=/data/local/tmp/light_l16_a1_capture_once.sh
-REMOTE_RESULT=/data/local/tmp/light_l16_a1_capture.result
-REMOTE_ARM=/data/local/tmp/light_l16_a1_capture.armed
-ARM_VALUE=A1_CAPTURE_20000000NS_GAIN_1.0_ONCE
+if [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_A1" ]; then
+    PROFILE=a1
+    PROFILE_LABEL=A1
+    EXPECTED_MODE=A1_FIXED_CAPTURE_20MS_ONCE
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_a1_capture_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_a1_capture.result
+    REMOTE_ARM=/data/local/tmp/light_l16_a1_capture.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_a1_capture_run
+    ARM_VALUE=A1_CAPTURE_20000000NS_GAIN_1.0_ONCE
+    OUTPUT_PREFIX=a1-capture
+    POLL_LIMIT=90
+    PASS_REBOOT_REQUIRED=no
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_ALL16" ]; then
+    PROFILE=all16
+    PROFILE_LABEL=ALL16
+    EXPECTED_MODE=ALL16_FIXED_CAPTURE_20MS_ONCE
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_all16_capture_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_all16_capture.result
+    REMOTE_ARM=/data/local/tmp/light_l16_all16_capture.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_all16_capture_run
+    ARM_VALUE=ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE
+    OUTPUT_PREFIX=all16-capture
+    POLL_LIMIT=150
+    PASS_REBOOT_REQUIRED=yes
+else
+    printf 'usage: %s {%s|%s}\n' "$0" "$CONFIRM_A1" "$CONFIRM_ALL16" >&2
+    printf 'Both profiles perform one real 20 ms lcc attempt. ALL16 always reboots.\n' >&2
+    exit 2
+fi
+
 RUN_STAMP=$(date -u '+%Y%m%dT%H%M%SZ')
 OUTPUT_ROOT=${LIGHT_L16_OUTPUT_ROOT:-"$REPO_ROOT/output"}
-HOST_OUTPUT="$OUTPUT_ROOT/a1-capture-$RUN_STAMP"
+HOST_OUTPUT="$OUTPUT_ROOT/$OUTPUT_PREFIX-$RUN_STAMP"
 RESULT_SEEN=no
 RESULT_PARSED=no
 CAPTURE_ATTEMPTED=unknown
 FINAL_STATUS=unknown
+RESULT_MODE=unknown
 LCC_EXIT_STATUS=unknown
 CLEANUP_OK=unknown
 MANUAL_CONTROL_AFTER=unknown
@@ -220,7 +244,7 @@ else
 fi
 
 ATTEMPT=0
-while [ "$ATTEMPT" -lt 90 ]; do
+while [ "$ATTEMPT" -lt "$POLL_LIMIT" ]; do
     # This production Android build uses the legacy adb shell protocol: the
     # host sees status 0 even when the remote command exits nonzero.  Determine
     # completion from an exact stdout marker, never from adb's exit status.
@@ -253,6 +277,7 @@ if [ "$RESULT_SEEN" = "yes" ]; then
     cat "$HOST_OUTPUT/result.txt"
     CAPTURE_ATTEMPTED=$(sed -n 's/^capture_attempted=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     FINAL_STATUS=$(sed -n 's/^final_status=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    RESULT_MODE=$(sed -n 's/^mode=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     LCC_EXIT_STATUS=$(sed -n 's/^lcc_exit_status=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     CLEANUP_OK=$(sed -n 's/^cleanup_ok=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     MANUAL_CONTROL_AFTER=$(sed -n 's/^manual_control_after=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
@@ -261,14 +286,18 @@ if [ "$RESULT_SEEN" = "yes" ]; then
     SETTLED_CAMERA_CLIENTS=$(sed -n 's/^settled_camera_clients=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     MEDIA_AFTER=$(sed -n 's/^media_after=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     LIGHTSVR_AFTER=$(sed -n 's/^lightsvr_after=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    [ "$RESULT_MODE" = "$EXPECTED_MODE" ] || {
+        printf 'completed result has unexpected mode: %s\n' "$RESULT_MODE" >&2
+        exit 1
+    }
     case "$CAPTURE_ATTEMPTED:$FINAL_STATUS:$NORMAL_REBOOT_REQUIRED" in
-        yes:PASS:no)
+        "yes:PASS:$PASS_REBOOT_REQUIRED")
             [ "$LCC_EXIT_STATUS" = "0" ] && [ "$CLEANUP_OK" = "yes" ] && \
                 [ "$LCC_PROCESS_AFTER" = "no" ] && \
                 [ "$SETTLED_CAMERA_CLIENTS" = "none" ] && \
                 [ "$MEDIA_AFTER" = "running" ] && \
                 [ "$LIGHTSVR_AFTER" = "running" ] || {
-                    printf 'PASS result lacks complete no-reboot postconditions\n' >&2
+                    printf 'PASS result lacks complete settled-cleanup postconditions\n' >&2
                     exit 1
                 }
             case "$MANUAL_CONTROL_AFTER" in
@@ -287,8 +316,8 @@ if [ "$RESULT_SEEN" = "yes" ]; then
     esac
     DEVICE_WORKDIR=$(sed -n 's/^workdir=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     case "$DEVICE_WORKDIR" in
-        /data/local/tmp/light_l16_a1_capture_run.*)
-            WORK_PID=${DEVICE_WORKDIR#/data/local/tmp/light_l16_a1_capture_run.}
+        "$REMOTE_WORK_PREFIX".*)
+            WORK_PID=${DEVICE_WORKDIR#"$REMOTE_WORK_PREFIX".}
             case "$WORK_PID" in
                 ""|*[!0-9]*)
                     printf 'refusing unexpected device workdir: %s\n' "$DEVICE_WORKDIR" >&2
@@ -316,7 +345,8 @@ if [ "$RESULT_SEEN" = "yes" ]; then
     fi
     RESULT_PARSED=yes
 else
-    printf 'no result after 90 seconds; capture state is unknown\n' >&2
+    printf 'no result after %s seconds; capture state is unknown\n' \
+        "$POLL_LIMIT" >&2
     "$ADB" pull "$REMOTE_RESULT" "$HOST_OUTPUT/result.partial.txt" \
         >/dev/null 2>&1 || true
 fi
@@ -325,13 +355,26 @@ fi
 REMOTE_FILES_CLEARED=yes
 
 if [ "$CAPTURE_ATTEMPTED:$FINAL_STATUS:$NORMAL_REBOOT_REQUIRED" = \
-    "yes:PASS:no" ] && [ "$DEVICE_LOGS_PULLED" = "yes" ] && \
+    "yes:PASS:$PASS_REBOOT_REQUIRED" ] && \
+    [ "$DEVICE_LOGS_PULLED" = "yes" ] && \
     [ "$LRI_PULLED" = "yes" ]
 then
-    SAFE_NO_REBOOT=yes
-    printf 'Clean PASS and settled cleanup verified; no reboot requested.\n' >&2
+    if [ "$PROFILE" = "a1" ]; then
+        SAFE_NO_REBOOT=yes
+        printf 'Clean PASS and settled cleanup verified; no reboot requested.\n' >&2
+        printf 'Logs saved under %s\n' "$HOST_OUTPUT" >&2
+        exit 0
+    fi
+    printf '%s PASS artifacts pulled; requesting the mandatory normal reboot.\n' \
+        "$PROFILE_LABEL" >&2
+    if "$ADB" reboot; then
+        REBOOT_SENT=yes
+        printf 'Logs saved under %s\n' "$HOST_OUTPUT" >&2
+        exit 0
+    fi
+    printf 'adb reboot failed; perform one normal hardware restart.\n' >&2
     printf 'Logs saved under %s\n' "$HOST_OUTPUT" >&2
-    exit 0
+    exit 1
 fi
 
 if [ "$CAPTURE_ATTEMPTED" = "yes" ] || [ "$RESULT_SEEN" != "yes" ]; then

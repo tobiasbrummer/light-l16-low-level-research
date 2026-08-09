@@ -1,15 +1,54 @@
 #!/system/bin/sh
 # SPDX-License-Identifier: MIT
-# DANGER: after all fixed preconditions pass, this executes one A1 lcc capture.
-# It is intentionally not a general camera or root wrapper.
+# DANGER: after all fixed preconditions pass, this executes one fixed lcc
+# capture. It is intentionally not a general camera or root wrapper. The exact
+# installed path selects one of the two compiled-in profiles below.
 
 PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
 export PATH
 
-OUT=/data/local/tmp/light_l16_a1_capture.result
-ARM_FILE=/data/local/tmp/light_l16_a1_capture.armed
-ARM_VALUE=A1_CAPTURE_20000000NS_GAIN_1.0_ONCE
-WORK_PREFIX=/data/local/tmp/light_l16_a1_capture_run
+case "$0" in
+    /data/local/tmp/light_l16_a1_capture_once.sh)
+        OUT=/data/local/tmp/light_l16_a1_capture.result
+        ARM_FILE=/data/local/tmp/light_l16_a1_capture.armed
+        ARM_VALUE=A1_CAPTURE_20000000NS_GAIN_1.0_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_a1_capture_run
+        MODE=A1_FIXED_CAPTURE_20MS_ONCE
+        MASK0=02
+        MASK1=00
+        MASK2=00
+        SELECTION_DESCRIPTION='mask=02 00 00 module=A1 asic=1'
+        CAPTURE_TIMEOUT_SECONDS=30
+        MIN_DATA_FREE_KB=262144
+        DIAGNOSTIC_LOG_LINES=500
+        ALLOW_CLEAN_NO_REBOOT=yes
+        ;;
+    /data/local/tmp/light_l16_all16_capture_once.sh)
+        OUT=/data/local/tmp/light_l16_all16_capture.result
+        ARM_FILE=/data/local/tmp/light_l16_all16_capture.armed
+        ARM_VALUE=ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_all16_capture_run
+        MODE=ALL16_FIXED_CAPTURE_20MS_ONCE
+        MASK0=FE
+        MASK1=FF
+        MASK2=01
+        SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3'
+        CAPTURE_TIMEOUT_SECONDS=60
+        MIN_DATA_FREE_KB=1048576
+        DIAGNOSTIC_LOG_LINES=2000
+        ALLOW_CLEAN_NO_REBOOT=no
+        ;;
+    *)
+        printf 'refusing unexpected invocation path: %s\n' "$0" >&2
+        exit 2
+        ;;
+esac
+
+EXPOSURE_NS=20000000
+GAIN=1.0
+TUPLE0=11
+TUPLE1=F1
+TUPLE2=00
 LCC_SOURCE=/system/etc/lcc
 HAL_SOURCE=/system/lib/hw/camera.msm8996.so
 MANUAL_CONTROL=/sys/class/light_ccb/common/manual_control
@@ -24,7 +63,6 @@ EXPECTED_LCC_SIZE=501352
 EXPECTED_LCC_SHA1=01b4ea363174240bee5a3005ba9c39f6cb529e6f
 EXPECTED_HAL_SIZE=1338100
 EXPECTED_HAL_SHA1=016602174e0635e79cda5566d5e850c1294a9300
-MIN_DATA_FREE_KB=262144
 
 CAPTURE_ATTEMPTED=no
 FINAL_STATUS=FAIL
@@ -107,9 +145,9 @@ valid_generated_lri_path() {
 capture_diagnostics() {
     SUFFIX=$1
     [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ] || return 0
-    /system/bin/dmesg | /system/bin/toybox tail -n 500 \
+    /system/bin/dmesg | /system/bin/toybox tail -n "$DIAGNOSTIC_LOG_LINES" \
         > "$WORKDIR/dmesg.$SUFFIX.txt" 2>&1
-    /system/bin/logcat -d -v threadtime -t 500 \
+    /system/bin/logcat -d -v threadtime -t "$DIAGNOSTIC_LOG_LINES" \
         > "$WORKDIR/logcat.$SUFFIX.txt" 2>&1
     {
         printf 'time_utc='; /system/bin/date -u '+%Y-%m-%dT%H:%M:%SZ'
@@ -183,7 +221,8 @@ finish() {
     # manual-control gate.  Only that exact PASS path may continue without a
     # reboot; every timeout, signal, failure, or ambiguous state keeps the
     # fail-safe reboot requirement.
-    if [ "$ORIGINAL_STATUS" = "0" ] && [ "$CAPTURE_ATTEMPTED" = "yes" ] && \
+    if [ "$ALLOW_CLEAN_NO_REBOOT" = "yes" ] && \
+        [ "$ORIGINAL_STATUS" = "0" ] && [ "$CAPTURE_ATTEMPTED" = "yes" ] && \
         [ "$FINAL_STATUS" = "PASS" ] && [ "$LCC_STATUS" = "0" ] && \
         [ "$LRI_OUTPUT_COUNT" = "1" ] && [ "$CLEANUP_OK" = "yes" ]
     then
@@ -236,7 +275,7 @@ trap 'FINAL_REASON=signal_hup; exit 129' HUP
 trap 'FINAL_REASON=signal_int; exit 130' INT
 trap 'FINAL_REASON=signal_term; exit 143' TERM
 
-printf 'mode=A1_FIXED_CAPTURE_20MS_ONCE\n'
+printf 'mode=%s\n' "$MODE"
 printf 'warning=this_payload_executes_lcc_after_preflight\n'
 
 [ -r "$ARM_FILE" ] || fail not_armed
@@ -357,11 +396,13 @@ COPY_SHA1=${COPY_SHA1%% *}
 [ "$COPY_SHA1" = "$EXPECTED_LCC_SHA1" ] || fail copied_lcc_hash_mismatch
 printf 'lcc_copy_sha1=%s\n' "$COPY_SHA1"
 
-printf '%s\n' 'mask=02 00 00 module=A1 asic=1'
-printf '%s\n' 'factory_tuple=11 F1 00'
-printf '%s\n' \
-    'executed_argv=<verified-lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 -R 4160,3120 -e 20000000 -g 1.0'
-printf '%s\n' 'outer_timeout=TERM_after_30s_KILL_after_5s'
+printf '%s\n' "$SELECTION_DESCRIPTION"
+printf 'factory_tuple=%s %s %s\n' "$TUPLE0" "$TUPLE1" "$TUPLE2"
+printf 'executed_argv=<verified-lcc-copy> -m 0 -s 0 -f 1 %s %s %s %s %s %s -R 4160,3120 -e %s -g %s\n' \
+    "$MASK0" "$MASK1" "$MASK2" "$TUPLE0" "$TUPLE1" "$TUPLE2" \
+    "$EXPOSURE_NS" "$GAIN"
+printf 'outer_timeout=TERM_after_%ss_KILL_after_5s\n' \
+    "$CAPTURE_TIMEOUT_SECONDS"
 printf '%s\n' 'lcc_response_files=disabled'
 printf '%s\n' 'hal_lri_output=expected_automatically'
 printf 'hal_lri_directory=%s\n' "$LRI_DIR"
@@ -370,9 +411,10 @@ CAPTURE_ATTEMPTED=yes
 NORMAL_REBOOT_REQUIRED=yes
 (
     cd "$WORKDIR" || exit 126
-    /system/bin/timeout -k 5s 30s "$LCC_COPY" \
-        -m 0 -s 0 -f 1 02 00 00 11 F1 00 \
-        -R 4160,3120 -e 20000000 -g 1.0
+    /system/bin/timeout -k 5s "${CAPTURE_TIMEOUT_SECONDS}s" "$LCC_COPY" \
+        -m 0 -s 0 -f 1 "$MASK0" "$MASK1" "$MASK2" \
+        "$TUPLE0" "$TUPLE1" "$TUPLE2" \
+        -R 4160,3120 -e "$EXPOSURE_NS" -g "$GAIN"
 ) > "$WORKDIR/lcc.txt" 2>&1
 LCC_STATUS=$?
 printf 'lcc_returned=%s\n' "$LCC_STATUS"

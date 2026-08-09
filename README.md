@@ -22,31 +22,42 @@ The following results are confirmed for one production Light L16 running build
   changing a partition, or installing persistent root.
 - The checked-in A1 dry-run passed its live identity, service-state, binary,
   and cleanup checks without invoking `lcc` or issuing a capture request.
-- A separately armed, fixed-parameter A1 wrapper bounds `lcc` with an outer
-  timeout, repeats `manual_control` cleanup, collects logs, removes its temporary
-  executable, and identifies the HAL-generated timestamped LRI without touching
-  older files. A verified clean return may remain up; every timeout, failure,
-  ambiguous result, or incomplete artifact/log transfer requests a normal
-  reboot.
+- A separately armed wrapper exposes only two compiled-in 20 ms, gain-1.0
+  profiles: A1 and the factory-derived explicit all-module mask `FE FF 01`.
+  It bounds `lcc` with an outer timeout, repeats `manual_control` cleanup,
+  collects logs, removes its temporary executable, and identifies the
+  HAL-generated timestamped LRI without touching older files. Only a verified
+  clean A1 return may remain up. Every all-16 run, timeout, or failure,
+  and every ambiguous or incomplete artifact transfer requests a normal reboot.
 - Two manual A1-only captures have completed on the identified device: first at
   2.61 ms and then at 20 ms, both at analog and digital gain 1.0. Both LRIs
   decode as exactly one A1 RAW10 surface at 4160 x 3120 with no unknown protobuf
   fields. The 20 ms run also verified the clean no-reboot path and continued
   normal camera-service state.
+- One explicit all-16 capture completed at 20 ms and gain 1.0. A single HAL
+  request produced one 259,999,993-byte LRI containing 16 enabled RAW10
+  surfaces in the expected 6 + 6 + 4 ASIC grouping. All three capture headers
+  have the same image ID and timestamp, every module records 19,999,956 ns,
+  and all approximately 208 million decoded samples are below saturation.
+  New HAL timeout and metadata-buffer errors mean that the conservative public
+  log analyzer still reports `CONTROL_PATH_FAILED`; the decoded artifact,
+  clean teardown, mandatory reboot, and normal post-boot state are reported
+  separately rather than hidden by that verdict.
 - A host-only analyzer conservatively separates wrapper failure, new camera or
   kernel diagnostics, incomplete evidence, and a control-path pass. It verifies
   the LRI transfer hash and public LELR framing but never upgrades that result
   to decoded, plausible pixels or a verified post-reboot state.
 
-This repository claims a successful manual A1 single-module capture only for
-the exact production build and fixed wrapper documented here. It does not yet
-claim arbitrary per-module operation, simultaneous combinations, focus or
-mirror control, or a general safe camera-control API.
+This repository claims the documented A1 captures and one explicit all-16
+capture only for the exact production build and fixed profiles documented
+here. It does not yet claim that every arbitrary subset has been exercised,
+nanosecond-level inter-sensor synchronization, direct focus or mirror control,
+or a general safe camera-control API.
 
 ## Documentation
 
 - [Private driver ABI and data flow](docs/driver-abi.md)
-- [Factory module selection, A1 preflight, and bounded one-shot wrapper](docs/lcc-control.md)
+- [Factory module selection, A1/all-16 tests, and bounded one-shot wrapper](docs/lcc-control.md)
 - [Temporary root runner](docs/temporary-root.md)
 - [Reproducing the offline analysis](docs/reproduction.md)
 - [Security policy and device-safety boundary](SECURITY.md)

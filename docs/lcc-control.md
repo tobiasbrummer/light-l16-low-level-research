@@ -9,10 +9,13 @@ also statically known.
 
 This proves the userspace control interface. Two bounded live tests additionally
 prove that the fixed wrapper can capture A1 alone on the examined production
-camera at 2.61 ms and 20 ms. The repository provides mask tooling, a
-camera-read-only A1 preflight, the tightly fixed one-shot execution wrapper,
-and a conservative host-side log analyzer. This is not yet a claim that every
-module, combination, focus, or mirror-control path works safely.
+camera at 2.61 ms and 20 ms. A third test proves that the factory-derived
+explicit mask `FE FF 01` can return all 16 module surfaces in one 20 ms
+capture request. The repository provides mask tooling, a camera-read-only A1
+preflight, two tightly fixed execution profiles, and a conservative host-side
+log analyzer. This is not yet a claim that every arbitrary subset, direct
+focus operation, or direct mirror-control path works safely, nor does a common
+request prove nanosecond-level sensor synchronization.
 
 ## Relevant factory binary
 
@@ -153,7 +156,7 @@ to its timeout. Thus the fixed `lcc` command is statically expected to create
 an LRI automatically; no output option is needed. This is stronger than merely
 finding an `.lri` string, because the writer is reached from the capture-result
 callback and the factory workflow calls the exported start and close functions.
-Two bounded live runs have since produced files through exactly this path; see
+Three bounded live runs have since produced files through exactly this path; see
 the confirmed results below.
 
 ## Reference values from a normal A1 capture
@@ -233,23 +236,34 @@ It prints the concrete plan above. It never copies or invokes `lcc`, never
 writes camera sysfs, and has no execution option.
 
 The separately named [`device/a1_capture_once.sh`](../device/a1_capture_once.sh)
-is the enabled wrapper. It is intentionally unsuitable for arbitrary commands
-or parameters. Before it can reach `lcc`, it requires all of the following:
+is the enabled wrapper. Despite the historical filename, it contains exactly
+two fixed profiles selected only by the exact installed path:
 
-- the exact one-use arming value
-  `A1_CAPTURE_20000000NS_GAIN_1.0_ONCE`, which it immediately deletes;
+| Installed path | Selection | Timeout | Minimum free space | Clean PASS |
+| --- | --- | ---: | ---: | --- |
+| `/data/local/tmp/light_l16_a1_capture_once.sh` | A1, `02 00 00` | 30 s | 256 MiB | may remain up |
+| `/data/local/tmp/light_l16_all16_capture_once.sh` | all 16, `FE FF 01` | 60 s | 1 GiB | always reboot |
+
+Both use `11 F1 00`, 4160 x 3120, 20,000,000 ns, gain 1.0, and one
+frame. Any other installed path is rejected. The payload is intentionally
+unsuitable for arbitrary commands or parameters. Before it can reach `lcc`,
+it requires all of the following:
+
+- the exact profile-specific one-use arming value
+  (`A1_CAPTURE_20000000NS_GAIN_1.0_ONCE` or
+  `ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE`), which it immediately deletes;
 - UID 0 through the self-clearing `fihop` runner and the exact known build,
   kernel, SELinux, ASIC firmware, `lcc` identity, and camera-HAL identity;
 - normal boot with `media` and `lightsvr` running, `ro.light.aos=1`, no special
   LCC mode, stopped `fwupgrade`, and no existing `lcc` process;
 - `manual_control=0`, no active CameraService client, UDP port 5000 unused, and
-  at least 256 MiB free under `/data`.
+  the profile-specific free-space threshold under `/data`.
 
 It then makes a fresh, hash-verified executable copy of `/system/etc/lcc` in a
-PID-specific root-owned directory and runs only the fixed 20 ms, gain-1.0 A1
-command through Toybox `timeout`: TERM after 30 seconds, KILL after five more
-seconds. The still-running root supervisor immediately writes
-`manual_control=0` again,
+PID-specific root-owned directory and runs only the selected fixed profile
+through Toybox `timeout`: TERM after 30 seconds for A1 or 60 seconds for
+all 16, KILL after five more seconds. The still-running root supervisor
+immediately writes `manual_control=0` again,
 checks that no `lcc` process or CameraService client remains, captures bounded
 before/after logs, and deletes the executable copy. It does not run
 `prog_app_p2`, reset an ASIC, start `fwupgrade`, touch a block device, or invoke
@@ -263,14 +277,15 @@ the capture bundle and verifies the same size and SHA-1 locally. An absent or
 ambiguous new artifact prevents a `PASS` result.
 
 Because a timeout can kill `lcc` before its own `close_camera`, the fail-safe
-default after reaching `lcc` remains a normal reboot. The device changes that
-decision to `normal_reboot_required=no` only when `lcc` returned zero, exactly
-one LRI was found, `manual_control=0`, no `lcc` process remains, CameraService
-is empty both immediately and after a settle interval, and `media` plus
-`lightsvr` are still running. The host additionally requires the complete
-diagnostic directory and a byte- and SHA-1-matching LRI before it honors that
-result. Every timeout, signal, failure, malformed result, or incomplete pull
-still requests `adb reboot`.
+default after reaching `lcc` remains a normal reboot. Only the A1 profile may
+change that decision to `normal_reboot_required=no`, and only when `lcc`
+returned zero, exactly one LRI was found, `manual_control=0`, no `lcc`
+process remains, CameraService is empty both immediately and after a settle
+interval, and `media` plus `lightsvr` are still running. The all-16 profile
+keeps `normal_reboot_required=yes` even on that clean path. The host
+additionally requires the complete diagnostic directory and a byte- and
+SHA-1-matching LRI before it honors either result. Every timeout, signal,
+failure, malformed result, or incomplete pull still requests `adb reboot`.
 
 ## Running the camera-read-only A1 preflight
 
@@ -308,20 +323,30 @@ supervisor, whose deliberately long confirmation argument is required:
 host/run_a1_capture_once.sh --execute-fixed-a1-20ms-once-with-failure-reboot
 ```
 
+The explicit all-16 entry point has a separate confirmation and always reboots
+after pulling the attempted capture:
+
+```bash
+host/run_all16_capture_once.sh --execute-fixed-all16-20ms-once-and-reboot
+```
+
 The host side requires exactly one authorized ADB device and rejects it unless
 build, model, and product identifiers match the examined L16. It then pushes
 and hashes the payload, creates the one-use arm file, verifies all six `fihop`
 properties before triggering once, and polls for a completed result for at most
-90 seconds. The examined Android build uses the legacy ADB shell protocol and
-does not propagate remote command failures to the host, so completion is
+90 seconds for A1 or 150 seconds for all 16. The examined Android build uses
+the legacy ADB shell protocol and does not propagate remote command failures
+to the host, so completion is
 recognized only from an exact stdout marker produced after `final_status`
 exists. The one-use arm value is likewise read back and compared before the
 trigger. Its exit trap clears all six properties; after a trigger may have been
 delivered it does not delete the remote arm or payload in the trap, because
 that could race a newly started wrapper. It pulls the result and diagnostic
-directory under `output/a1-capture-<UTC>/`. A completed clean result with the
-settled postconditions above remains up only after both the diagnostics and LRI
-were copied successfully. Otherwise an attempted or uncertain capture requests
+directory under `output/a1-capture-<UTC>/` or
+`output/all16-capture-<UTC>/`. A completed clean A1 result with the settled
+postconditions above remains up only after both the diagnostics and LRI were
+copied successfully. A completed all-16 result reboots after those copies have
+been verified. Otherwise an attempted or uncertain capture requests
 `adb reboot`. A preflight failure before `lcc` does not cause an automatic
 reboot. The original HAL-generated LRI is deliberately left on the camera.
 
@@ -330,6 +355,7 @@ camera:
 
 ```bash
 python3 tools/analyze_a1_capture.py output/a1-capture-<UTC>
+python3 tools/analyze_a1_capture.py output/all16-capture-<UTC>
 ```
 
 The analyzer checks the completed wrapper result, immediate and settled cleanup
@@ -349,8 +375,8 @@ Even the pass verdict reports
 `pixel_validation=lri_transfer_and_container_framing_valid_protobuf_and_pixels_unverified`
 and
 `post_reboot_validation=not_in_capture_bundle`. It cannot replace the live
-normal-boot checks below, nor does it decode the LightHeader to prove that only
-A1 fired or test whether its raw samples are plausible.
+normal-boot checks below, nor does it decode the LightHeader to prove which
+modules fired or test whether their raw samples are plausible.
 
 After the supervisor returns, independently verify the continued or rebooted
 device state before opening the camera application:
@@ -372,28 +398,30 @@ returned zero, exactly one new HAL LRI was found and hashed, and the gate and
 process checks passed. A no-reboot result additionally includes the settled
 CameraService and service-state checks, and the host verifies both diagnostic
 and pixel copies before leaving the camera up. This is still not by itself proof
-that A1 delivered valid pixels: the LRI's decoded module list, exposure
-metadata, dimensions, raw format, and sample statistics must be checked
-separately.
+that the requested modules delivered valid pixels: the LRI's decoded module
+list, exposure metadata, dimensions, raw format, and sample statistics must be
+checked separately.
 
 ## Confirmed device-side wrapper syntax
 
-The current 15,481-byte 20 ms payload was copied to a uniquely named temporary
-file on the identified production L16 on 2026-08-09. Host and device both
+The current 16,997-byte dual-profile payload was copied under its exact all-16
+path on the identified production L16 on 2026-08-09. Host and device both
 reported SHA-1:
 
 ```text
-a8270d08d19aa44c5511117c9646a10cb763f823
+9162065d787c866096ff064e0c28495d7a29aef5
 ```
 
 The device's `/system/bin/sh -n` returned zero and the syntax-only copy was
-removed before capture. This exact payload then completed the 20 ms live run
-documented below.
+removed before capture. This exact payload then completed the 20 ms all-16 live
+run documented below.
 
-For history, an earlier 14,338-byte payload from commit `7a10811` was also
-syntax-checked on the same device. Its SHA-1 was
-`4cb888e6470f9c5a052fbc74f4276608c831b1e4`; that check did not execute the
-capture path.
+For history, the preceding 15,481-byte A1-only payload had SHA-1
+`a8270d08d19aa44c5511117c9646a10cb763f823` and completed the 20 ms A1
+run. An earlier 14,338-byte payload from commit `7a10811` was also
+syntax-checked on the same device; its SHA-1 was
+`4cb888e6470f9c5a052fbc74f4276608c831b1e4`, and that check did not execute
+the capture path.
 
 ## Confirmed legacy ADB behavior and aborted capture attempts
 
@@ -500,3 +528,89 @@ failure, an invalid LRI, or a dirty live state. The analyzer therefore retains
 them as `REVIEW` and returns `INCOMPLETE_EVIDENCE` rather than silently treating
 them as benign. The separate timeout matcher no longer mistakes the normal
 `Stopping SOF timeout thread` teardown line for an actual capture timeout.
+
+## Confirmed explicit all-16 capture
+
+One bounded all-16 capture completed on the same device on 2026-08-09 with:
+
+```text
+<lcc-copy> -m 0 -s 0 -f 1 FE FF 01 11 F1 00 -R 4160,3120 -e 20000000 -g 1.0
+```
+
+`lcc` returned zero and the wrapper found exactly one new 259,999,993-byte
+LRI. The host copy matched the device size and SHA-1
+`bbb723bf04388e961ee3d61e2fd01df9833f39e5`; its SHA-256 is
+`2fef156da924746ce3e7cf6f71f558c74b3f47f632a4f9d404c75f19cfa85ceb`.
+The container has ten completely framed blocks. The runtime schema consumes
+every protobuf byte with zero unknown fields.
+
+The three ASIC capture blocks contain the expected 6 + 6 + 4 grouping:
+
+- A1, A5, B2, B4, B5, C5;
+- A2, A3, A4, B1, B3, C2;
+- C1, C3, C4, C6.
+
+All 16 records are enabled RAW10 surfaces at 4160 x 3120. Every record carries
+19,999,956 ns, analog gain 1.0, digital gain 1.0, and sensor temperature 27.
+The three block headers also carry the same 128-bit image ID and the same
+2026-08-09 21:21:53 +02:00 timestamp. Together with the single HAL request and
+mask, this proves one logical multi-ASIC capture. It does not measure the
+physical exposure-start skew between sensors.
+
+The lossless unpacker visited all 207,667,200 raw samples. The scene was the
+upward-facing camera under the monitors; the counters are therefore a
+plausibility check, not a flat-field or linearity measurement:
+
+| Module | Min | Mean | Median | P99 | Max | At/above 1023 | Mirror | Vignetting choice |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| A1 | 30 | 50.8375 | 49 | 77 | 98 | 0 | absent | single |
+| A2 | 34 | 61.1967 | 57 | 107 | 130 | 0 | absent | single |
+| A3 | 33 | 51.8716 | 49 | 79 | 105 | 0 | absent | single |
+| A4 | 32 | 51.5906 | 49 | 80 | 105 | 0 | absent | single |
+| A5 | 33 | 50.2101 | 48 | 80 | 105 | 0 | absent | single |
+| B1 | 30 | 53.3570 | 51 | 88 | 108 | 0 | 519 | exact lower endpoint |
+| B2 | 33 | 59.9083 | 60 | 88 | 110 | 0 | 457 | interpolated |
+| B3 | 32 | 54.6796 | 55 | 73 | 93 | 0 | 520 | exact lower endpoint |
+| B4 | 31 | 53.7295 | 53 | 78 | 107 | 0 | 0 | single |
+| B5 | 33 | 52.4132 | 52 | 68 | 88 | 0 | 558 | clamped to 559 |
+| C1 | 32 | 50.1512 | 50 | 60 | 75 | 0 | 203 | clamped to 204 |
+| C2 | 32 | 46.4036 | 44 | 63 | 85 | 0 | 501 | exact lower endpoint |
+| C3 | 32 | 49.0683 | 48 | 64 | 87 | 0 | 388 | exact lower endpoint |
+| C4 | 36 | 54.2667 | 55 | 63 | 84 | 0 | 354 | exact lower endpoint |
+| C5 | 36 | 54.2364 | 55 | 64 | 85 | 0 | 0 | single |
+| C6 | 29 | 63.2718 | 68 | 82 | 101 | 0 | 0 | single |
+
+The complete radiometric normalization also ran on all 16 surfaces. It
+retained two previously documented evidence limits instead of silently
+inventing calibration:
+
+- the LRI contains no separate monochrome `sensor_data`, so A2 and C6 inherit
+  the color-sensor black/white values 42/1023 and carry an explicit warning;
+- B5 at Hall 558 and C1 at Hall 203 lie exactly one count below their first
+  vignetting support points, 559 and 204. The implementation clamps each to
+  that endpoint and marks the choice as not calibration-covered. The numerical
+  extrapolation distance is tiny, but it remains unverified without a targeted
+  calibration measurement.
+
+The new diagnostics are not clean enough to call this an unqualified
+control-path pass. Unlike either A1 run, the bounded all-16 log contains 19
+`RDI SOF` timeout messages, 49 failures to obtain a metadata buffer paired
+with 49 failures to issue SOF to all modules, and two buffer-unmap failures.
+The capture nevertheless logs `All transfers done` immediately after the
+last RDI timeout, writes the LRI, returns zero, stops session 2 successfully,
+and closes camera ID 0 with `rc: 0`. There is no MIPI RX error, kernel fault,
+process fatality, `light_ccb` transfer failure, or lost module in the decoded
+artifact. The public analyzer intentionally reports `CONTROL_PATH_FAILED`
+because real timeout/failure diagnostics are fail-closed; the artifact evidence
+does not erase those messages.
+
+The profile retained `normal_reboot_required=yes`. The host pulled and
+verified the diagnostic directory and LRI before requesting the normal reboot.
+At uptime 38.00 seconds after boot, `sys.boot_completed=1`, `media` and
+`lightsvr` were running, `fwupgrade` was stopped, `manual_control=0`, no
+`lcc` process remained, the trigger was zero, and all five argument
+properties were empty. The normal Light camera application had reopened camera
+ID 0 after boot; that new application client was not a surviving `lcc`
+session. A second check at uptime 854.19 seconds found CameraService empty
+again while both services, the zero manual gate, and all runner properties
+remained clean.
