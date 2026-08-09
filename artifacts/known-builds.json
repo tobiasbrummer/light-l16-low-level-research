@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "name": "Light L16 production build examined in this repository",
+      "lightos": "1.3.5.1",
+      "build_incremental": "00WW_1_351",
+      "kernel_release": "3.18.20-perf-g32d1d1c",
+      "artifacts": {
+        "kernel.raw": {
+          "sha256": "9aa66e7e05f73db804aae09a8b9eaae0bfb1e3913c4c9e1d3f699ffbffb58df6"
+        },
+        "liblight_ccb.so": {
+          "sha256": "62539cb346906f36e9f97266169e0e6a986b1e147026eaab625f20517c78e039",
+          "gnu_build_id": "e050cac3a0cefaacd66ef789b83bbad9"
+        },
+        "libmmcamera2_sensor_modules.so": {
+          "sha256": "96a4fa8e750bfd13c4bdbe6a007807b5e8101b23ebd1de498b3c8e33bb3670ac",
+          "gnu_build_id": "6251e338ca3270cb1c581dab7fa7dc0d"
+        },
+        "system/etc/fihop.sh": {
+          "sha256": "6550cce118492e43c5285d469f7dc383e4d6c14c7cf766de1c82cb57fbaebe4f"
+        }
+      }
+    }
+  ]
+}

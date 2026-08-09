@@ -1,0 +1,18 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.log
+
+# Owner-supplied inputs and generated reverse-engineering output
+inputs/
+output/
+*.img
+*.bin
+*.elf
+*.so
+*.apk
+*.zip
+*.gpr
+*.rep/
