@@ -22,21 +22,26 @@ The following results are confirmed for one production Light L16 running build
   changing a partition, or installing persistent root.
 - The checked-in A1 dry-run passed its live identity, service-state, binary,
   and cleanup checks without invoking `lcc` or issuing a capture request.
-- A separately armed, fixed-parameter A1 wrapper now bounds `lcc` with an outer
+- A separately armed, fixed-parameter A1 wrapper bounds `lcc` with an outer
   timeout, repeats `manual_control` cleanup, collects logs, removes its temporary
-  executable, identifies the HAL-generated timestamped LRI without touching
-  older files, and requires a normal reboot after every attempted capture. It
-  has not yet been executed on the camera. The exact current payload has passed
-  `/system/bin/sh -n` on the identified production device.
+  executable, and identifies the HAL-generated timestamped LRI without touching
+  older files. A verified clean return may remain up; every timeout, failure,
+  ambiguous result, or incomplete artifact/log transfer requests a normal
+  reboot.
+- Two manual A1-only captures have completed on the identified device: first at
+  2.61 ms and then at 20 ms, both at analog and digital gain 1.0. Both LRIs
+  decode as exactly one A1 RAW10 surface at 4160 x 3120 with no unknown protobuf
+  fields. The 20 ms run also verified the clean no-reboot path and continued
+  normal camera-service state.
 - A host-only analyzer conservatively separates wrapper failure, new camera or
   kernel diagnostics, incomplete evidence, and a control-path pass. It verifies
   the LRI transfer hash and public LELR framing but never upgrades that result
   to decoded, plausible pixels or a verified post-reboot state.
 
-This repository does **not** claim a successful manual single-module capture.
-The factory `lcc` path, its module mask, the A1 reference parameters, and the
-bounded execution procedure are understood, but the live result remains a
-separate hardware test.
+This repository claims a successful manual A1 single-module capture only for
+the exact production build and fixed wrapper documented here. It does not yet
+claim arbitrary per-module operation, simultaneous combinations, focus or
+mirror control, or a general safe camera-control API.
 
 ## Documentation
 

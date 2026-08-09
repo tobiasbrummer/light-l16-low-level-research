@@ -93,7 +93,7 @@ def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
     assert 'rm -f "$ARM_FILE"' in text
     assert '/system/bin/timeout -k 5s 30s "$LCC_COPY"' in text
     assert "-m 0 -s 0 -f 1 02 00 00 11 F1 00" in text
-    assert "-R 4160,3120 -e 2609592 -g 1.0" in text
+    assert "-R 4160,3120 -e 20000000 -g 1.0" in text
     assert " -F " not in text
     assert " -C " not in text
     assert "lcc_response_files=disabled" in text
@@ -123,7 +123,7 @@ def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
         assert forbidden not in text
 
 
-def test_host_capture_supervisor_requires_confirmation_and_reboots(
+def test_host_capture_supervisor_requires_confirmation_and_reboots_only_on_failure(
     tmp_path: Path,
 ) -> None:
     supervisor = ROOT / "host" / "run_a1_capture_once.sh"
@@ -173,6 +173,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
 
             capture_attempted = os.environ.get("FAKE_CAPTURE_ATTEMPTED", "yes")
             final_status = os.environ.get("FAKE_FINAL_STATUS", "PASS")
+            cleanup_ok = os.environ.get("FAKE_CLEANUP_OK", "yes")
             pixel = (
                 struct.pack("<4sQQIB7x", b"LELR", 43, 35, 8, 0)
                 + b"raw"
@@ -180,11 +181,16 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
             )
             pixel_sha1 = hashlib.sha1(pixel).hexdigest()
             result = (
-                "mode=A1_FIXED_CAPTURE_ONCE\\n"
+                "mode=A1_FIXED_CAPTURE_20MS_ONCE\\n"
                 f"capture_attempted={capture_attempted}\\n"
                 "lcc_exit_status=0\\n"
-                "cleanup_ok=yes\\n"
-                f"normal_reboot_required={'yes' if capture_attempted == 'yes' else 'no'}\\n"
+                "manual_control_after=manual_control mode is 0x0\\n"
+                "lcc_process_after=no\\n"
+                f"cleanup_ok={cleanup_ok}\\n"
+                "settled_camera_clients=none\\n"
+                "media_after=running\\n"
+                "lightsvr_after=running\\n"
+                f"normal_reboot_required={'no' if capture_attempted == 'yes' and final_status == 'PASS' else 'yes' if capture_attempted == 'yes' else 'no'}\\n"
                 "workdir=/data/local/tmp/light_l16_a1_capture_run.1234\\n"
                 "lri_output_count=1\\n"
                 "lri_output_path=/sdcard/DCIM/camera/RDI_20260809_123456_789.lri\\n"
@@ -232,7 +238,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
                 print(os.environ["EXPECTED_PAYLOAD_SHA1"] + "  payload")
                 raise SystemExit(0)
             if command.startswith("cat '/data/local/tmp/light_l16_a1_capture.armed'"):
-                print("A1_CAPTURE_2609592NS_GAIN_1.0_ONCE")
+                print("A1_CAPTURE_20000000NS_GAIN_1.0_ONCE")
                 raise SystemExit(0)
             if command.startswith("getprop "):
                 print(get_prop(shlex.split(command)[1]))
@@ -303,7 +309,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
         }
     )
     completed = subprocess.run(
-        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        [shell, str(supervisor), "--execute-fixed-a1-20ms-once-with-failure-reboot"],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -311,7 +317,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
     )
     assert completed.returncode == 0, completed.stderr
     assert (state / "triggered").exists()
-    assert (state / "rebooted").exists()
+    assert not (state / "rebooted").exists()
     results = list((tmp_path / "output").glob("*/result.txt"))
     assert len(results) == 1
     assert "final_status=PASS" in results[0].read_text(encoding="utf-8")
@@ -330,7 +336,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
         }
     )
     ambiguous = subprocess.run(
-        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        [shell, str(supervisor), "--execute-fixed-a1-20ms-once-with-failure-reboot"],
         cwd=ROOT,
         env=ambiguous_env,
         capture_output=True,
@@ -339,7 +345,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
     assert ambiguous.returncode == 0, ambiguous.stderr
     assert "delivery may have occurred" in ambiguous.stderr
     assert (ambiguous_state / "triggered").exists()
-    assert (ambiguous_state / "rebooted").exists()
+    assert not (ambiguous_state / "rebooted").exists()
     ambiguous_results = list(
         (tmp_path / "ambiguous-trigger-output").glob("*/result.txt")
     )
@@ -358,7 +364,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
         }
     )
     legacy = subprocess.run(
-        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        [shell, str(supervisor), "--execute-fixed-a1-20ms-once-with-failure-reboot"],
         cwd=ROOT,
         env=legacy_env,
         capture_output=True,
@@ -367,10 +373,35 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
     assert legacy.returncode == 0, legacy.stderr
     assert int((legacy_state / "poll-count").read_text(encoding="utf-8")) == 3
     assert (legacy_state / "result-ready").exists()
-    assert (legacy_state / "rebooted").exists()
+    assert not (legacy_state / "rebooted").exists()
     legacy_results = list((tmp_path / "legacy-shell-output").glob("*/result.txt"))
     assert len(legacy_results) == 1
     assert "final_status=PASS" in legacy_results[0].read_text(encoding="utf-8")
+
+    dirty_result_state = tmp_path / "fake-adb-dirty-result-state"
+    dirty_result_state.mkdir()
+    dirty_result_env = env.copy()
+    dirty_result_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "dirty-result-output"),
+            "FAKE_ADB_STATE": str(dirty_result_state),
+            "FAKE_CLEANUP_OK": "no",
+        }
+    )
+    dirty_result = subprocess.run(
+        [
+            shell,
+            str(supervisor),
+            "--execute-fixed-a1-20ms-once-with-failure-reboot",
+        ],
+        cwd=ROOT,
+        env=dirty_result_env,
+        capture_output=True,
+        text=True,
+    )
+    assert dirty_result.returncode != 0
+    assert (dirty_result_state / "triggered").exists()
+    assert (dirty_result_state / "rebooted").exists()
 
     stopped_state = tmp_path / "fake-adb-stopped-state"
     stopped_state.mkdir()
@@ -384,7 +415,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
         }
     )
     stopped = subprocess.run(
-        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        [shell, str(supervisor), "--execute-fixed-a1-20ms-once-with-failure-reboot"],
         cwd=ROOT,
         env=stopped_env,
         capture_output=True,
@@ -405,7 +436,7 @@ def test_host_capture_supervisor_requires_confirmation_and_reboots(
         }
     )
     failed_pull = subprocess.run(
-        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        [shell, str(supervisor), "--execute-fixed-a1-20ms-once-with-failure-reboot"],
         cwd=ROOT,
         env=failed_pull_env,
         capture_output=True,

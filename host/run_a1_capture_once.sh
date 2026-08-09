@@ -1,13 +1,13 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
-# Host supervisor for the fixed A1 device payload. This performs a real capture
-# attempt and always requests a normal reboot if the payload reached lcc.
+# Host supervisor for the fixed 20 ms A1 device payload. A fully verified clean
+# return stays up; every failure or ambiguous post-trigger state reboots.
 set -eu
 
-CONFIRM=--execute-fixed-a1-once-and-reboot
+CONFIRM=--execute-fixed-a1-20ms-once-with-failure-reboot
 if [ "$#" -ne 1 ] || [ "$1" != "$CONFIRM" ]; then
     printf 'usage: %s %s\n' "$0" "$CONFIRM" >&2
-    printf 'This performs one real A1 lcc attempt and normally reboots the camera.\n' >&2
+    printf 'This performs one real 20 ms A1 lcc attempt; any unsafe outcome reboots.\n' >&2
     exit 2
 fi
 
@@ -18,7 +18,7 @@ ADB=${LIGHT_L16_ADB:-adb}
 REMOTE_PAYLOAD=/data/local/tmp/light_l16_a1_capture_once.sh
 REMOTE_RESULT=/data/local/tmp/light_l16_a1_capture.result
 REMOTE_ARM=/data/local/tmp/light_l16_a1_capture.armed
-ARM_VALUE=A1_CAPTURE_2609592NS_GAIN_1.0_ONCE
+ARM_VALUE=A1_CAPTURE_20000000NS_GAIN_1.0_ONCE
 RUN_STAMP=$(date -u '+%Y%m%dT%H%M%SZ')
 OUTPUT_ROOT=${LIGHT_L16_OUTPUT_ROOT:-"$REPO_ROOT/output"}
 HOST_OUTPUT="$OUTPUT_ROOT/a1-capture-$RUN_STAMP"
@@ -26,10 +26,21 @@ RESULT_SEEN=no
 RESULT_PARSED=no
 CAPTURE_ATTEMPTED=unknown
 FINAL_STATUS=unknown
+LCC_EXIT_STATUS=unknown
+CLEANUP_OK=unknown
+MANUAL_CONTROL_AFTER=unknown
+LCC_PROCESS_AFTER=unknown
+NORMAL_REBOOT_REQUIRED=unknown
+SETTLED_CAMERA_CLIENTS=unknown
+MEDIA_AFTER=unknown
+LIGHTSVR_AFTER=unknown
 PROPERTIES_CLEARED=no
 REMOTE_FILES_CLEARED=no
 TRIGGER_SENT=no
 REBOOT_SENT=no
+DEVICE_LOGS_PULLED=no
+LRI_PULLED=no
+SAFE_NO_REBOOT=no
 
 pull_lri_artifact() {
     RESULT_FILE=$1
@@ -91,6 +102,7 @@ pull_lri_artifact() {
         printf 'sha1=%s\n' "$LOCAL_LRI_SHA1"
         printf 'remote_file_retained=yes\n'
     } > "$PIXEL_DIR/manifest.txt"
+    LRI_PULLED=yes
     printf 'LRI copied with matching size and SHA-1: %s\n' "$LOCAL_LRI" >&2
 }
 
@@ -113,7 +125,7 @@ finish_host() {
         "$ADB" shell "rm -f '$REMOTE_PAYLOAD' '$REMOTE_ARM'" \
             >/dev/null 2>&1 || true
     fi
-    if [ "$REBOOT_SENT" != "yes" ] && \
+    if [ "$REBOOT_SENT" != "yes" ] && [ "$SAFE_NO_REBOOT" != "yes" ] && \
         { [ "$CAPTURE_ATTEMPTED" = "yes" ] || \
           { [ "$TRIGGER_SENT" != "no" ] && [ "$RESULT_PARSED" != "yes" ]; }; }
     then
@@ -241,8 +253,33 @@ if [ "$RESULT_SEEN" = "yes" ]; then
     cat "$HOST_OUTPUT/result.txt"
     CAPTURE_ATTEMPTED=$(sed -n 's/^capture_attempted=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     FINAL_STATUS=$(sed -n 's/^final_status=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
-    case "$CAPTURE_ATTEMPTED:$FINAL_STATUS" in
-        yes:PASS|yes:FAIL|no:FAIL) ;;
+    LCC_EXIT_STATUS=$(sed -n 's/^lcc_exit_status=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    CLEANUP_OK=$(sed -n 's/^cleanup_ok=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    MANUAL_CONTROL_AFTER=$(sed -n 's/^manual_control_after=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    LCC_PROCESS_AFTER=$(sed -n 's/^lcc_process_after=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    NORMAL_REBOOT_REQUIRED=$(sed -n 's/^normal_reboot_required=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    SETTLED_CAMERA_CLIENTS=$(sed -n 's/^settled_camera_clients=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    MEDIA_AFTER=$(sed -n 's/^media_after=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    LIGHTSVR_AFTER=$(sed -n 's/^lightsvr_after=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    case "$CAPTURE_ATTEMPTED:$FINAL_STATUS:$NORMAL_REBOOT_REQUIRED" in
+        yes:PASS:no)
+            [ "$LCC_EXIT_STATUS" = "0" ] && [ "$CLEANUP_OK" = "yes" ] && \
+                [ "$LCC_PROCESS_AFTER" = "no" ] && \
+                [ "$SETTLED_CAMERA_CLIENTS" = "none" ] && \
+                [ "$MEDIA_AFTER" = "running" ] && \
+                [ "$LIGHTSVR_AFTER" = "running" ] || {
+                    printf 'PASS result lacks complete no-reboot postconditions\n' >&2
+                    exit 1
+                }
+            case "$MANUAL_CONTROL_AFTER" in
+                *0x0) ;;
+                *)
+                    printf 'PASS result lacks zero manual-control postcondition\n' >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
+        yes:FAIL:yes|no:FAIL:no) ;;
         *)
             printf 'malformed or inconsistent completed result\n' >&2
             exit 1
@@ -255,16 +292,23 @@ if [ "$RESULT_SEEN" = "yes" ]; then
             case "$WORK_PID" in
                 ""|*[!0-9]*)
                     printf 'refusing unexpected device workdir: %s\n' "$DEVICE_WORKDIR" >&2
+                    exit 1
                     ;;
                 *)
-                    "$ADB" pull "$DEVICE_WORKDIR" "$HOST_OUTPUT/device" \
-                        >/dev/null || true
+                    if "$ADB" pull "$DEVICE_WORKDIR" "$HOST_OUTPUT/device" \
+                        >/dev/null
+                    then
+                        DEVICE_LOGS_PULLED=yes
+                    else
+                        printf 'failed to pull device diagnostic directory\n' >&2
+                    fi
                     ;;
             esac
             ;;
         "") ;;
         *)
             printf 'refusing unexpected device workdir: %s\n' "$DEVICE_WORKDIR" >&2
+            exit 1
             ;;
     esac
     if [ "$CAPTURE_ATTEMPTED" = "yes" ]; then
@@ -280,15 +324,24 @@ fi
 "$ADB" shell "rm -f '$REMOTE_PAYLOAD' '$REMOTE_ARM'" >/dev/null 2>&1 || true
 REMOTE_FILES_CLEARED=yes
 
+if [ "$CAPTURE_ATTEMPTED:$FINAL_STATUS:$NORMAL_REBOOT_REQUIRED" = \
+    "yes:PASS:no" ] && [ "$DEVICE_LOGS_PULLED" = "yes" ] && \
+    [ "$LRI_PULLED" = "yes" ]
+then
+    SAFE_NO_REBOOT=yes
+    printf 'Clean PASS and settled cleanup verified; no reboot requested.\n' >&2
+    printf 'Logs saved under %s\n' "$HOST_OUTPUT" >&2
+    exit 0
+fi
+
 if [ "$CAPTURE_ATTEMPTED" = "yes" ] || [ "$RESULT_SEEN" != "yes" ]; then
-    printf 'A capture may have reached lcc; requesting mandatory normal reboot.\n' >&2
+    printf 'Capture outcome is not safe for continued uptime; requesting normal reboot.\n' >&2
     if "$ADB" reboot; then
         REBOOT_SENT=yes
     else
         printf 'adb reboot failed; perform one normal hardware restart.\n' >&2
     fi
     printf 'Logs saved under %s\n' "$HOST_OUTPUT" >&2
-    [ "$FINAL_STATUS" = "PASS" ] && exit 0
     exit 1
 fi
 

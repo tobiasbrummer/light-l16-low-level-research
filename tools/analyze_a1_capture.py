@@ -82,14 +82,14 @@ _DIAGNOSTIC_FAILURE_PATTERNS = (
         "camera_stack_error",
         re.compile(
             r"(?:light_ccb|lightsvr|camera\.msm8996|QCamera|mm-camera|CCI|I2C|SPI)"
-            r".{0,160}(?:NACK|timed?\s*out|fatal|failed|failure)",
+            r".{0,160}(?:NACK|timed\s+out|timeout(?!\s+thread\b)|fatal|failed|failure)",
             re.IGNORECASE,
         ),
     ),
     (
         "camera_stack_error",
         re.compile(
-            r"(?:NACK|timed?\s*out|fatal|failed|failure)"
+            r"(?:NACK|timed\s+out|timeout(?!\s+thread\b)|fatal|failed|failure)"
             r".{0,160}(?:light_ccb|lightsvr|camera\.msm8996|QCamera|mm-camera|CCI|I2C|SPI)",
             re.IGNORECASE,
         ),
@@ -311,22 +311,26 @@ def analyze_capture(root: Path) -> Analysis:
 
     findings: list[Finding] = []
     pixel_validation = "not_available_capture_artifact_missing"
-    missing_result_keys = [
-        key
-        for key in (
-            "capture_attempted",
-            "final_status",
-            "lcc_exit_status",
-            "cleanup_ok",
-            "manual_control_after",
-            "lcc_process_after",
-            "normal_reboot_required",
-            "lri_output_count",
-            "lri_output_path",
-            "lri_output_size",
-            "lri_output_sha1",
+    normal_reboot = result.get("normal_reboot_required")
+    required_result_keys = [
+        "capture_attempted",
+        "final_status",
+        "lcc_exit_status",
+        "cleanup_ok",
+        "manual_control_after",
+        "lcc_process_after",
+        "normal_reboot_required",
+        "lri_output_count",
+        "lri_output_path",
+        "lri_output_size",
+        "lri_output_sha1",
+    ]
+    if normal_reboot == "no":
+        required_result_keys.extend(
+            ("settled_camera_clients", "media_after", "lightsvr_after")
         )
-        if key not in result
+    missing_result_keys = [
+        key for key in required_result_keys if key not in result
     ]
     if missing_result_keys:
         findings.append(
@@ -344,7 +348,6 @@ def analyze_capture(root: Path) -> Analysis:
         "lcc_exit_status": "0",
         "cleanup_ok": "yes",
         "lcc_process_after": "no",
-        "normal_reboot_required": "yes",
         "lri_output_count": "1",
     }
     for key, expected in expected_values.items():
@@ -356,6 +359,22 @@ def analyze_capture(root: Path) -> Analysis:
         explicit_wrapper_failures.append(
             f"manual_control_after={manual_after} (expected zero)"
         )
+    if normal_reboot is not None and normal_reboot not in {"yes", "no"}:
+        explicit_wrapper_failures.append(
+            f"normal_reboot_required={normal_reboot} (expected yes or no)"
+        )
+    if normal_reboot == "no":
+        no_reboot_values = {
+            "settled_camera_clients": "none",
+            "media_after": "running",
+            "lightsvr_after": "running",
+        }
+        for key, expected in no_reboot_values.items():
+            actual = result.get(key)
+            if actual is not None and actual != expected:
+                explicit_wrapper_failures.append(
+                    f"{key}={actual} (expected {expected} for no reboot)"
+                )
     if "failure" in result and wrapper_status == "PASS":
         explicit_wrapper_failures.append(
             f"failure={result['failure']} is inconsistent with final_status=PASS"
@@ -370,7 +389,7 @@ def analyze_capture(root: Path) -> Analysis:
         )
 
     evidence = _evidence_directory(root)
-    required_files = (
+    required_files = [
         "lcc.txt",
         "dmesg.before.txt",
         "dmesg.after.txt",
@@ -378,7 +397,9 @@ def analyze_capture(root: Path) -> Analysis:
         "logcat.after.txt",
         "state.after.txt",
         "camera.after_immediate.txt",
-    )
+    ]
+    if normal_reboot == "no":
+        required_files.append("camera.after.txt")
     missing_files = [name for name in required_files if not (evidence / name).is_file()]
     if missing_files:
         findings.append(
@@ -450,6 +471,19 @@ def analyze_capture(root: Path) -> Analysis:
                 "the immediate post-capture CameraService snapshot is not empty",
             )
         )
+
+    if normal_reboot == "no":
+        settled_camera_path = evidence / "camera.after.txt"
+        if settled_camera_path.is_file() and not _camera_clients_none(
+            _read_text(settled_camera_path)
+        ):
+            findings.append(
+                Finding(
+                    "FAIL",
+                    "settled_camera_clients_not_empty_or_unknown",
+                    "the settled no-reboot CameraService snapshot is not empty",
+                )
+            )
 
     if result.get("lri_output_count") == "1":
         remote_path = result.get("lri_output_path", "")
@@ -538,13 +572,22 @@ def analyze_capture(root: Path) -> Analysis:
                 "LRI transfer and block framing only; module identity, protobuf content, and raw samples remain unverified",
             )
         )
-        findings.append(
-            Finding(
-                "NOTE",
-                "reboot_check_required",
-                "confirm normal boot, services, manual_control, and fihop properties live",
+        if normal_reboot == "yes":
+            findings.append(
+                Finding(
+                    "NOTE",
+                    "reboot_check_required",
+                    "confirm normal boot, services, manual_control, and fihop properties live",
+                )
             )
-        )
+        elif normal_reboot == "no":
+            findings.append(
+                Finding(
+                    "NOTE",
+                    "continued_uptime_check_required",
+                    "confirm continued uptime, services, manual_control, CameraService, and fihop properties live",
+                )
+            )
 
     return Analysis(
         verdict,

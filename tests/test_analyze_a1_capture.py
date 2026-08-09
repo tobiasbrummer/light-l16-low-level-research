@@ -18,15 +18,18 @@ from tools.analyze_a1_capture import (
 
 
 PASS_RESULT_BASE = """\
-mode=A1_FIXED_CAPTURE_ONCE
+mode=A1_FIXED_CAPTURE_20MS_ONCE
 capture_attempted=yes
 lcc_exit_status=0
 manual_control_after=manual control mode is 0x0
 lcc_process_after=no
 cleanup_ok=yes
-normal_reboot_required=yes
+settled_camera_clients=none
+media_after=running
+lightsvr_after=running
+normal_reboot_required=no
 workdir=/data/local/tmp/light_l16_a1_capture_run.1234
-final_reason=lcc_exit_zero_lri_captured_cleanup_verified_content_not_validated
+final_reason=lcc_exit_zero_lri_captured_settled_cleanup_verified_content_not_validated
 final_status=PASS
 """
 
@@ -79,6 +82,9 @@ def _write_bundle(root: Path, *, lcc: str | None = None) -> Path:
     (device / "camera.after_immediate.txt").write_text(
         "Active Camera Clients:\n[]\nAllowed users:\n0\n", encoding="utf-8"
     )
+    (device / "camera.after.txt").write_text(
+        "Active Camera Clients:\n[]\nAllowed users:\n0\n", encoding="utf-8"
+    )
     return root
 
 
@@ -92,6 +98,10 @@ def test_complete_bundle_passes_lri_framing_but_keeps_content_boundary(
         "lri_transfer_and_container_framing_valid_protobuf_and_pixels_unverified"
     )
     assert analysis.post_reboot_validation == "not_in_capture_bundle"
+    assert any(
+        finding.code == "continued_uptime_check_required"
+        for finding in analysis.findings
+    )
 
 
 def test_preflight_stop_is_distinct_from_capture_failure(tmp_path: Path) -> None:
@@ -168,6 +178,54 @@ def test_zero_error_counter_does_not_downgrade(tmp_path: Path) -> None:
     after = root / "device" / "logcat.after.txt"
     after.write_text("light_ccb error count: 0\n", encoding="utf-8")
     assert analyze_capture(root).verdict == PASS_VERDICT
+
+
+def test_stopping_sof_timeout_thread_is_not_a_capture_timeout(tmp_path: Path) -> None:
+    root = _write_bundle(tmp_path / "capture")
+    after = root / "device" / "logcat.after.txt"
+    after.write_text(
+        "mm-camera: Stopping SOF timeout thread session = 2\n", encoding="utf-8"
+    )
+    assert analyze_capture(root).verdict == PASS_VERDICT
+
+
+def test_real_camera_timeout_still_fails(tmp_path: Path) -> None:
+    root = _write_bundle(tmp_path / "capture")
+    after = root / "device" / "logcat.after.txt"
+    after.write_text("mm-camera timed out waiting for A1\n", encoding="utf-8")
+    analysis = analyze_capture(root)
+    assert analysis.verdict == FAILED_VERDICT
+    assert any(finding.code == "camera_stack_error" for finding in analysis.findings)
+
+
+def test_no_reboot_requires_settled_postconditions(tmp_path: Path) -> None:
+    root = _write_bundle(tmp_path / "capture")
+    result = (root / "result.txt").read_text(encoding="utf-8")
+    (root / "result.txt").write_text(
+        result.replace("settled_camera_clients=none", "settled_camera_clients=present"),
+        encoding="utf-8",
+    )
+    analysis = analyze_capture(root)
+    assert analysis.verdict == WRAPPER_FAILED_VERDICT
+
+
+def test_historical_pass_with_mandatory_reboot_remains_supported(
+    tmp_path: Path,
+) -> None:
+    root = _write_bundle(tmp_path / "capture")
+    result = (root / "result.txt").read_text(encoding="utf-8")
+    for line in (
+        "settled_camera_clients=none\n",
+        "media_after=running\n",
+        "lightsvr_after=running\n",
+    ):
+        result = result.replace(line, "")
+    result = result.replace("normal_reboot_required=no", "normal_reboot_required=yes")
+    (root / "result.txt").write_text(result, encoding="utf-8")
+    (root / "device" / "camera.after.txt").unlink()
+    analysis = analyze_capture(root)
+    assert analysis.verdict == PASS_VERDICT
+    assert any(finding.code == "reboot_check_required" for finding in analysis.findings)
 
 
 def test_cli_emits_stable_verdict_and_exit_code(tmp_path: Path, capsys) -> None:

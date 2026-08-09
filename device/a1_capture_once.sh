@@ -8,7 +8,7 @@ export PATH
 
 OUT=/data/local/tmp/light_l16_a1_capture.result
 ARM_FILE=/data/local/tmp/light_l16_a1_capture.armed
-ARM_VALUE=A1_CAPTURE_2609592NS_GAIN_1.0_ONCE
+ARM_VALUE=A1_CAPTURE_20000000NS_GAIN_1.0_ONCE
 WORK_PREFIX=/data/local/tmp/light_l16_a1_capture_run
 LCC_SOURCE=/system/etc/lcc
 HAL_SOURCE=/system/lib/hw/camera.msm8996.so
@@ -38,6 +38,9 @@ LRI_OUTPUT_COUNT=unknown
 LRI_OUTPUT_PATH=
 LRI_OUTPUT_SIZE=unknown
 LRI_OUTPUT_SHA1=
+SETTLED_CAMERA_CLIENTS=unknown
+MEDIA_AFTER=unknown
+LIGHTSVR_AFTER=unknown
 
 clear_runner() {
     setprop persist.sys.fihop 0
@@ -142,8 +145,11 @@ finish() {
 
     capture_diagnostics after
     if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
-        /system/bin/timeout -k 2s 10s /system/bin/dumpsys media.camera \
-            > "$WORKDIR/camera.after.txt" 2>&1 || true
+        if camera_clients_none "$WORKDIR/camera.after.txt"; then
+            SETTLED_CAMERA_CLIENTS=none
+        else
+            SETTLED_CAMERA_CLIENTS=present_or_unknown
+        fi
     fi
 
     LCC_REMAINS=no
@@ -155,7 +161,12 @@ finish() {
         MANUAL_AFTER=$(cat "$MANUAL_CONTROL" 2>/dev/null)
     fi
 
-    if manual_is_zero && [ "$LCC_REMAINS" = "no" ]; then
+    MEDIA_AFTER=$(getprop init.svc.media)
+    LIGHTSVR_AFTER=$(getprop init.svc.lightsvr)
+    if manual_is_zero && [ "$LCC_REMAINS" = "no" ] && \
+        [ "$SETTLED_CAMERA_CLIENTS" = "none" ] && \
+        [ "$MEDIA_AFTER" = "running" ] && [ "$LIGHTSVR_AFTER" = "running" ]
+    then
         CLEANUP_OK=yes
     fi
     if [ "$CAPTURE_ATTEMPTED" = "yes" ] && [ "$CLEANUP_OK" != "yes" ]; then
@@ -167,11 +178,26 @@ finish() {
         rm -f "$LCC_COPY"
     fi
 
+    # A clean, normally returned lcc process has now closed the HAL, remained
+    # absent for the settle interval, released CameraService, and restored the
+    # manual-control gate.  Only that exact PASS path may continue without a
+    # reboot; every timeout, signal, failure, or ambiguous state keeps the
+    # fail-safe reboot requirement.
+    if [ "$ORIGINAL_STATUS" = "0" ] && [ "$CAPTURE_ATTEMPTED" = "yes" ] && \
+        [ "$FINAL_STATUS" = "PASS" ] && [ "$LCC_STATUS" = "0" ] && \
+        [ "$LRI_OUTPUT_COUNT" = "1" ] && [ "$CLEANUP_OK" = "yes" ]
+    then
+        NORMAL_REBOOT_REQUIRED=no
+    fi
+
     printf 'capture_attempted=%s\n' "$CAPTURE_ATTEMPTED"
     printf 'lcc_exit_status=%s\n' "$LCC_STATUS"
     printf 'manual_control_after=%s\n' "$MANUAL_AFTER"
     printf 'lcc_process_after=%s\n' "$LCC_REMAINS"
     printf 'cleanup_ok=%s\n' "$CLEANUP_OK"
+    printf 'settled_camera_clients=%s\n' "$SETTLED_CAMERA_CLIENTS"
+    printf 'media_after=%s\n' "$MEDIA_AFTER"
+    printf 'lightsvr_after=%s\n' "$LIGHTSVR_AFTER"
     printf 'normal_reboot_required=%s\n' "$NORMAL_REBOOT_REQUIRED"
     printf 'lri_output_count=%s\n' "$LRI_OUTPUT_COUNT"
     printf 'lri_output_path=%s\n' "$LRI_OUTPUT_PATH"
@@ -210,7 +236,7 @@ trap 'FINAL_REASON=signal_hup; exit 129' HUP
 trap 'FINAL_REASON=signal_int; exit 130' INT
 trap 'FINAL_REASON=signal_term; exit 143' TERM
 
-printf 'mode=A1_FIXED_CAPTURE_ONCE\n'
+printf 'mode=A1_FIXED_CAPTURE_20MS_ONCE\n'
 printf 'warning=this_payload_executes_lcc_after_preflight\n'
 
 [ -r "$ARM_FILE" ] || fail not_armed
@@ -334,7 +360,7 @@ printf 'lcc_copy_sha1=%s\n' "$COPY_SHA1"
 printf '%s\n' 'mask=02 00 00 module=A1 asic=1'
 printf '%s\n' 'factory_tuple=11 F1 00'
 printf '%s\n' \
-    'executed_argv=<verified-lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 -R 4160,3120 -e 2609592 -g 1.0'
+    'executed_argv=<verified-lcc-copy> -m 0 -s 0 -f 1 02 00 00 11 F1 00 -R 4160,3120 -e 20000000 -g 1.0'
 printf '%s\n' 'outer_timeout=TERM_after_30s_KILL_after_5s'
 printf '%s\n' 'lcc_response_files=disabled'
 printf '%s\n' 'hal_lri_output=expected_automatically'
@@ -346,7 +372,7 @@ NORMAL_REBOOT_REQUIRED=yes
     cd "$WORKDIR" || exit 126
     /system/bin/timeout -k 5s 30s "$LCC_COPY" \
         -m 0 -s 0 -f 1 02 00 00 11 F1 00 \
-        -R 4160,3120 -e 2609592 -g 1.0
+        -R 4160,3120 -e 20000000 -g 1.0
 ) > "$WORKDIR/lcc.txt" 2>&1
 LCC_STATUS=$?
 printf 'lcc_returned=%s\n' "$LCC_STATUS"
@@ -402,5 +428,5 @@ fi
 [ "$LCC_STATUS" = "0" ] || fail lcc_nonzero_or_timeout
 [ "$LRI_OUTPUT_COUNT" = "1" ] || fail lri_artifact_missing_or_ambiguous
 FINAL_STATUS=PASS
-FINAL_REASON=lcc_exit_zero_lri_captured_cleanup_verified_content_not_validated
+FINAL_REASON=lcc_exit_zero_lri_captured_settled_cleanup_verified_content_not_validated
 exit 0
