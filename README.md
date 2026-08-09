@@ -22,15 +22,20 @@ The following results are confirmed for one production Light L16 running build
   changing a partition, or installing persistent root.
 - The checked-in A1 dry-run passed its live identity, service-state, binary,
   and cleanup checks without invoking `lcc` or issuing a capture request.
+- A separately armed, fixed-parameter A1 wrapper now bounds `lcc` with an outer
+  timeout, repeats `manual_control` cleanup, collects logs, removes its temporary
+  executable, and requires a normal reboot after every attempted capture. It
+  has not yet been executed on the camera.
 
 This repository does **not** claim a successful manual single-module capture.
-The factory `lcc` path and its module mask are understood, but a live capture is
-a separate hardware test with additional cleanup requirements.
+The factory `lcc` path, its module mask, the A1 reference parameters, and the
+bounded execution procedure are understood, but the live result remains a
+separate hardware test.
 
 ## Documentation
 
 - [Private driver ABI and data flow](docs/driver-abi.md)
-- [Factory module selection and camera-read-only A1 preflight](docs/lcc-control.md)
+- [Factory module selection, A1 preflight, and bounded one-shot wrapper](docs/lcc-control.md)
 - [Temporary root runner](docs/temporary-root.md)
 - [Reproducing the offline analysis](docs/reproduction.md)
 - [Security policy and device-safety boundary](SECURITY.md)

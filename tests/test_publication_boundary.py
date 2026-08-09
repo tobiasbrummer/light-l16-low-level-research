@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 
@@ -70,9 +73,234 @@ def test_a1_dry_run_is_syntax_valid_and_cannot_capture() -> None:
         "start fwupgrade",
         "echo 1 >",
         "reboot",
-        "timeout ",
+        "/system/bin/timeout -",
     ):
         assert forbidden not in text
+
+
+def test_a1_capture_payload_is_fixed_armed_and_cleanup_bounded() -> None:
+    payload = ROOT / "device" / "a1_capture_once.sh"
+    text = payload.read_text(encoding="utf-8")
+    shell = shutil.which("sh")
+    if shell is not None:
+        subprocess.run([shell, "-n", str(payload)], check=True)
+
+    clear = 'setprop persist.sys.fihop 0'
+    armed = '[ "$ARMED" = "$ARM_VALUE" ]'
+    attempted = "CAPTURE_ATTEMPTED=yes"
+    assert text.index(clear) < text.index(': > "$OUT"')
+    assert text.index(armed) < text.index(attempted)
+    assert 'rm -f "$ARM_FILE"' in text
+    assert '/system/bin/timeout -k 5s 30s "$LCC_COPY"' in text
+    assert "-m 0 -s 0 -f 1 02 00 00 11 F1 00" in text
+    assert "-R 4160,3120 -e 2609592 -g 1.0" in text
+    assert " -F " not in text
+    assert " -C " not in text
+    assert 'printf \'0\\n\' > "$MANUAL_CONTROL"' in text
+    assert "NORMAL_REBOOT_REQUIRED=yes" in text
+    assert 'rm -f "$LCC_COPY"' in text
+    for forbidden in (
+        "/dev/block",
+        "prog_app_p2",
+        "start fwupgrade",
+        "camera_enable",
+        "eeprom",
+        " -m program",
+        "/sys/class/light_ccb/spi/firmware",
+        "/system/bin/reboot",
+    ):
+        assert forbidden not in text
+
+
+def test_host_capture_supervisor_requires_confirmation_and_reboots(tmp_path: Path) -> None:
+    supervisor = ROOT / "host" / "run_a1_capture_once.sh"
+    shell = shutil.which("sh")
+    assert shell is not None
+    subprocess.run([shell, "-n", str(supervisor)], check=True)
+
+    without_confirmation = subprocess.run(
+        [shell, str(supervisor)], capture_output=True, text=True
+    )
+    assert without_confirmation.returncode == 2
+
+    state = tmp_path / "fake-adb-state"
+    state.mkdir()
+    fake_adb = tmp_path / "adb"
+    fake_adb.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import os
+            import shlex
+            import sys
+            from pathlib import Path
+
+            state = Path(os.environ["FAKE_ADB_STATE"])
+            args = sys.argv[1:]
+            with (state / "calls.log").open("a", encoding="utf-8") as log:
+                log.write(repr(args) + "\\n")
+
+            def prop_path(name):
+                return state / ("prop-" + name.replace(".", "_"))
+
+            def set_prop(name, value):
+                prop_path(name).write_text(value, encoding="utf-8")
+
+            def get_prop(name):
+                path = prop_path(name)
+                if path.exists():
+                    return path.read_text(encoding="utf-8")
+                return {
+                    "ro.build.version.incremental": "00WW_1_351",
+                    "ro.product.model": "L16",
+                    "ro.product.name": "LFC_0002_FIH01",
+                }.get(name, "")
+
+            capture_attempted = os.environ.get("FAKE_CAPTURE_ATTEMPTED", "yes")
+            final_status = os.environ.get("FAKE_FINAL_STATUS", "PASS")
+            result = (
+                "mode=A1_FIXED_CAPTURE_ONCE\\n"
+                f"capture_attempted={capture_attempted}\\n"
+                "lcc_exit_status=0\\n"
+                "cleanup_ok=yes\\n"
+                f"normal_reboot_required={'yes' if capture_attempted == 'yes' else 'no'}\\n"
+                "workdir=/data/local/tmp/light_l16_a1_capture_run.1234\\n"
+                f"final_status={final_status}\\n"
+                "final_reason=simulated\\n"
+            )
+
+            if not args:
+                raise SystemExit(1)
+            if args[0] == "devices":
+                print("List of devices attached")
+                print("FAKE123\\tdevice")
+                raise SystemExit(0)
+            if args[0] == "push":
+                raise SystemExit(0)
+            if args[0] == "reboot":
+                (state / "rebooted").touch()
+                raise SystemExit(0)
+            if args[0] == "pull":
+                source, target = args[1], Path(args[2])
+                if source.endswith("light_l16_a1_capture.result"):
+                    if os.environ.get("FAKE_PULL_RESULT_FAIL") == "1":
+                        raise SystemExit(1)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(result, encoding="utf-8")
+                else:
+                    target.mkdir(parents=True, exist_ok=True)
+                    (target / "lcc.txt").write_text("simulated\\n", encoding="utf-8")
+                raise SystemExit(0)
+            if args[0] != "shell":
+                raise SystemExit(1)
+
+            command = args[1]
+            if "sha1sum" in command:
+                print(os.environ["EXPECTED_PAYLOAD_SHA1"] + "  payload")
+                raise SystemExit(0)
+            if command.startswith("getprop "):
+                print(get_prop(shlex.split(command)[1]))
+                raise SystemExit(0)
+            if command == "setprop persist.sys.fihop 8":
+                set_prop("persist.sys.fihop", "8")
+                (state / "triggered").touch()
+                raise SystemExit(0)
+            if command.startswith("setprop persist.sys.fihop ") and ";" not in command:
+                parts = shlex.split(command)
+                set_prop(parts[1], parts[2])
+                raise SystemExit(0)
+            if command.startswith("setprop persist.sys.fihop1 "):
+                parts = shlex.split(command)
+                set_prop(parts[1], parts[2])
+                raise SystemExit(0)
+            if command.startswith("setprop persist.sys.fihop2 "):
+                parts = shlex.split(command)
+                set_prop(parts[1], parts[2])
+                raise SystemExit(0)
+            if "setprop persist.sys.fihop 0;" in command:
+                set_prop("persist.sys.fihop", "0")
+                for number in range(1, 6):
+                    set_prop(f"persist.sys.fihop{number}", "")
+                raise SystemExit(0)
+            if command.startswith("setprop persist.sys.fihop3 "):
+                for number in range(3, 6):
+                    set_prop(f"persist.sys.fihop{number}", "")
+                raise SystemExit(0)
+            if command.startswith("grep -q '^final_status='"):
+                raise SystemExit(0 if (state / "triggered").exists() else 1)
+            raise SystemExit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_adb.chmod(0o755)
+
+    payload = ROOT / "device" / "a1_capture_once.sh"
+    env = os.environ.copy()
+    env.update(
+        {
+            "LIGHT_L16_ADB": str(fake_adb),
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "output"),
+            "FAKE_ADB_STATE": str(state),
+            "EXPECTED_PAYLOAD_SHA1": hashlib.sha1(payload.read_bytes()).hexdigest(),
+        }
+    )
+    completed = subprocess.run(
+        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert (state / "triggered").exists()
+    assert (state / "rebooted").exists()
+    results = list((tmp_path / "output").glob("*/result.txt"))
+    assert len(results) == 1
+    assert "final_status=PASS" in results[0].read_text(encoding="utf-8")
+
+    stopped_state = tmp_path / "fake-adb-stopped-state"
+    stopped_state.mkdir()
+    stopped_env = env.copy()
+    stopped_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "stopped-output"),
+            "FAKE_ADB_STATE": str(stopped_state),
+            "FAKE_CAPTURE_ATTEMPTED": "no",
+            "FAKE_FINAL_STATUS": "FAIL",
+        }
+    )
+    stopped = subprocess.run(
+        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        cwd=ROOT,
+        env=stopped_env,
+        capture_output=True,
+        text=True,
+    )
+    assert stopped.returncode == 1
+    assert (stopped_state / "triggered").exists()
+    assert not (stopped_state / "rebooted").exists()
+
+    failed_pull_state = tmp_path / "fake-adb-failed-pull-state"
+    failed_pull_state.mkdir()
+    failed_pull_env = env.copy()
+    failed_pull_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "failed-pull-output"),
+            "FAKE_ADB_STATE": str(failed_pull_state),
+            "FAKE_PULL_RESULT_FAIL": "1",
+        }
+    )
+    failed_pull = subprocess.run(
+        [shell, str(supervisor), "--execute-fixed-a1-once-and-reboot"],
+        cwd=ROOT,
+        env=failed_pull_env,
+        capture_output=True,
+        text=True,
+    )
+    assert failed_pull.returncode != 0
+    assert (failed_pull_state / "triggered").exists()
+    assert (failed_pull_state / "rebooted").exists()
 
 
 def test_repository_contains_no_proprietary_binary_extensions() -> None:

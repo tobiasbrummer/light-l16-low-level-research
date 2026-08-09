@@ -15,6 +15,7 @@ EXPECTED_SELINUX=Permissive
 EXPECTED_ASIC_FW=0076D11B
 EXPECTED_LCC_SIZE=501352
 EXPECTED_LCC_SHA1=01b4ea363174240bee5a3005ba9c39f6cb529e6f
+MIN_DATA_FREE_KB=262144
 
 # Clear the persistent root-runner trigger and arguments before diagnostics.
 setprop persist.sys.fihop 0
@@ -60,10 +61,15 @@ BOOT_MODE=$(getprop ro.bootmode)
 KERNEL=$(uname -r)
 SELINUX=$(getenforce)
 ASIC_FW=$(getprop ASIC_FW_VERSION)
+MEDIA_STATE=$(getprop init.svc.media)
+LIGHTSVR_STATE=$(getprop init.svc.lightsvr)
+AOS=$(getprop ro.light.aos)
+LCC_MODE=$(getprop camera.light.lcc.mode)
 printf 'build=%s type=%s debuggable=%s kernel=%s selinux=%s\n' \
     "$BUILD" "$BUILD_TYPE" "$DEBUGGABLE" "$KERNEL" "$SELINUX"
-printf 'boot_completed=%s bootmode=%s asic_fw=%s\n' \
-    "$BOOT_COMPLETED" "$BOOT_MODE" "$ASIC_FW"
+printf 'boot_completed=%s bootmode=%s asic_fw=%s aos=%s lcc_mode=%s\n' \
+    "$BOOT_COMPLETED" "$BOOT_MODE" "$ASIC_FW" "$AOS" "$LCC_MODE"
+printf 'media=%s lightsvr=%s\n' "$MEDIA_STATE" "$LIGHTSVR_STATE"
 [ "$BUILD" = "$EXPECTED_BUILD" ] || fail "unexpected_build"
 [ "$BUILD_TYPE" = "$EXPECTED_BUILD_TYPE" ] || fail "unexpected_build_type"
 [ "$DEBUGGABLE" = "$EXPECTED_DEBUGGABLE" ] || fail "unexpected_debuggable"
@@ -72,6 +78,13 @@ printf 'boot_completed=%s bootmode=%s asic_fw=%s\n' \
 [ "$BOOT_COMPLETED" = "1" ] || fail "boot_not_completed"
 [ "$BOOT_MODE" = "unknown" ] || fail "unexpected_bootmode"
 [ "$ASIC_FW" = "$EXPECTED_ASIC_FW" ] || fail "unexpected_asic_firmware"
+[ "$AOS" = "1" ] || fail "unexpected_aos_state"
+case "$LCC_MODE" in
+    ""|0) ;;
+    *) fail "unexpected_lcc_mode" ;;
+esac
+[ "$MEDIA_STATE" = "running" ] || fail "media_not_running"
+[ "$LIGHTSVR_STATE" = "running" ] || fail "lightsvr_not_running"
 
 [ "$(getprop persist.sys.fihop)" = "0" ] || fail "root_trigger_not_cleared"
 for PROPERTY in \
@@ -88,6 +101,7 @@ LCC_SHA1=$(/system/bin/toybox sha1sum "$LCC_SOURCE") || fail "cannot_hash_lcc"
 LCC_SHA1=${LCC_SHA1%% *}
 printf 'lcc_size=%s lcc_sha1=%s\n' "$LCC_SIZE" "$LCC_SHA1"
 [ "$LCC_SHA1" = "$EXPECTED_LCC_SHA1" ] || fail "unexpected_lcc_hash"
+[ -x /system/bin/timeout ] || fail "timeout_missing"
 
 [ -r "$MANUAL_CONTROL" ] || fail "manual_control_missing"
 MANUAL_VALUE=$(cat "$MANUAL_CONTROL") || fail "cannot_read_manual_control"
@@ -100,6 +114,22 @@ esac
 FWUPGRADE_STATE=$(getprop init.svc.fwupgrade)
 printf 'fwupgrade=%s\n' "$FWUPGRADE_STATE"
 [ "$FWUPGRADE_STATE" = "stopped" ] || fail "fwupgrade_not_stopped"
+
+if /system/bin/toybox pgrep -x lcc >/dev/null 2>&1; then
+    fail "lcc_already_running"
+fi
+if /system/bin/toybox grep -qi ':1388' /proc/net/udp /proc/net/udp6 2>/dev/null; then
+    fail "udp_port_5000_in_use"
+fi
+DATA_LINE=$(/system/bin/toybox df -k /data | /system/bin/toybox tail -n 1) \
+    || fail "cannot_read_data_free_space"
+set -- $DATA_LINE
+DATA_FREE_KB=$4
+case "$DATA_FREE_KB" in
+    ""|*[!0-9]*) fail "invalid_data_free_space" ;;
+esac
+printf 'data_free_kb=%s\n' "$DATA_FREE_KB"
+[ "$DATA_FREE_KB" -ge "$MIN_DATA_FREE_KB" ] || fail "insufficient_data_free_space"
 
 /system/bin/dumpsys media.camera > "$CAMERA_DUMP" \
     || fail "camera_service_dump_failed"

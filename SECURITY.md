@@ -20,6 +20,9 @@ compatibility.
   `firmware` as camera-control APIs.
 - Do not execute recovered calibration, ASIC programming, or factory-init
   binaries.
+- The enabled A1 wrapper is valid only for the exact checked identities and
+  fixed arguments. Do not generalize it, add `prog_app_p2`, suppress its
+  post-attempt normal reboot, or reuse it while a CameraService client exists.
 - Never test on a device you do not own or administer with permission.
 
 ## Reporting a problem

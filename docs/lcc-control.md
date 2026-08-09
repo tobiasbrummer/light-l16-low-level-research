@@ -9,8 +9,9 @@ also statically known.
 
 This proves the userspace control interface. It does **not** prove that a manual
 single-module capture has completed successfully on the examined production
-camera. The repository therefore provides mask tooling and a camera-read-only
-A1 preflight, but no enabled capture payload.
+camera. The repository provides mask tooling, a camera-read-only A1 preflight,
+and a tightly fixed one-shot execution wrapper. The execution wrapper has not
+yet been run on the camera.
 
 ## Relevant factory binary
 
@@ -132,6 +133,13 @@ omits it:
 This remains a statically and metadata-derived candidate. It has not been
 executed on the camera.
 
+The first execution deliberately omits `-C`. Static inspection shows that this
+flag enables an additional output/channel path, while the recovered factory
+MIPI test does not use it. The first hardware test therefore validates only the
+single-module control and capture path through `lcc`; it is not expected to
+produce an LRI or persistent raw image. Enabling and validating an output path
+is a separate later test.
+
 ## Why the first live call needs a wrapper
 
 The normal path is stateful:
@@ -147,8 +155,8 @@ terminate the process before `manual_control=0` or `close_camera`. Resetting the
 sysfs gate from a supervising shell addresses only the former; closing state
 owned by the terminated process may still require a normal device restart.
 
-For that reason, the first checked-in device payload is only
-[`device/a1_capture_dry_run.sh`](../device/a1_capture_dry_run.sh). It verifies:
+The camera-read-only payload
+[`device/a1_capture_dry_run.sh`](../device/a1_capture_dry_run.sh) verifies:
 
 - UID 0 through the bounded `fihop` runner and cleared runner properties;
 - the exact production build, completed normal boot, and known `lcc` identity;
@@ -159,6 +167,33 @@ For that reason, the first checked-in device payload is only
 
 It prints the concrete plan above. It never copies or invokes `lcc`, never
 writes camera sysfs, and has no execution option.
+
+The separately named [`device/a1_capture_once.sh`](../device/a1_capture_once.sh)
+is the enabled wrapper. It is intentionally unsuitable for arbitrary commands
+or parameters. Before it can reach `lcc`, it requires all of the following:
+
+- the exact one-use arming value
+  `A1_CAPTURE_2609592NS_GAIN_1.0_ONCE`, which it immediately deletes;
+- UID 0 through the self-clearing `fihop` runner and the exact known build,
+  kernel, SELinux, ASIC firmware, `lcc` size, and `lcc` SHA-1;
+- normal boot with `media` and `lightsvr` running, `ro.light.aos=1`, no special
+  LCC mode, stopped `fwupgrade`, and no existing `lcc` process;
+- `manual_control=0`, no active CameraService client, UDP port 5000 unused, and
+  at least 256 MiB free under `/data`.
+
+It then makes a fresh, hash-verified executable copy of `/system/etc/lcc` in a
+PID-specific root-owned directory and runs only the fixed A1 command through
+Toybox `timeout`: TERM after 30 seconds, KILL after five more seconds. The
+still-running root supervisor immediately writes `manual_control=0` again,
+checks that no `lcc` process or CameraService client remains, captures bounded
+before/after logs, and deletes the executable copy. It does not run
+`prog_app_p2`, reset an ASIC, start `fwupgrade`, touch a block device, or invoke
+raw focus, mirror, firmware, or calibration controls.
+
+Because a timeout can kill `lcc` before its own `close_camera`, the wrapper
+marks a normal reboot as mandatory after every attempt that reaches `lcc`, even
+if `lcc` exits zero and immediate cleanup appears healthy. It does not reboot
+itself: logs must be made readable and pulled first.
 
 ## Running the camera-read-only A1 preflight
 
@@ -184,10 +219,47 @@ preflight=PASS
 
 This is still a camera-read-only inventory step: the bounded root runner clears
 its persistent properties and the payload writes temporary result files, but it
-does not issue a camera-control request. The trusted A1 reference parameters
-are now resolved. Before adding an execution mode, the remaining work is to
-implement a fixed-purpose supervisor, specify timeout and logging behavior,
-and define the post-failure normal-restart check.
+does not issue a camera-control request.
+
+## Running the fixed capture wrapper
+
+Do not invoke the device payload directly. From a clean checkout, review both
+wrappers and make sure the camera contains no unsaved work. Then use the host
+supervisor, whose deliberately long confirmation argument is required:
+
+```bash
+host/run_a1_capture_once.sh --execute-fixed-a1-once-and-reboot
+```
+
+The host side requires exactly one authorized ADB device and rejects it unless
+build, model, and product identifiers match the examined L16. It then pushes
+and hashes the payload, creates the one-use arm file, verifies all six `fihop`
+properties before triggering once, and polls for a completed result for at most
+90 seconds. Its exit trap clears all six properties. It pulls the result and
+diagnostic directory under `output/a1-capture-<UTC>/` and requests a normal
+`adb reboot` whenever the device reports `capture_attempted=yes` or no complete
+result is available. A preflight failure before `lcc` does not cause an
+automatic reboot.
+
+After the camera returns, verify the normal-boot postcondition before opening
+the camera application:
+
+```bash
+adb shell 'getprop sys.boot_completed; getprop ro.bootmode; getprop init.svc.media; getprop init.svc.lightsvr'
+adb shell 'cat /sys/class/light_ccb/common/manual_control; /system/bin/toybox pgrep -x lcc; true'
+adb shell 'for p in persist.sys.fihop persist.sys.fihop1 persist.sys.fihop2 persist.sys.fihop3 persist.sys.fihop4 persist.sys.fihop5; do printf "%s=%s\n" "$p" "$(getprop "$p")"; done'
+```
+
+Expected: boot completed `1`, boot mode `unknown`, both services `running`,
+`manual_control mode is 0x0`, no `lcc` PID, trigger `0`, and five empty argument
+properties. If ADB disappears before the host can request its reboot, do not
+retrigger `fihop`; perform one normal hardware restart instead.
+
+`final_status=PASS` has a deliberately narrow meaning: the exact `lcc` process
+returned zero, the gate and process checks passed, and the host requested the
+planned reboot. It is not yet proof that A1 delivered valid pixels. The pulled
+`lcc.txt`, dmesg, logcat, and CameraService snapshots must be inspected before
+any output-enabled or multi-module test.
 
 ## Confirmed dry-run result
 
@@ -207,7 +279,12 @@ Independent host cleanup then left the trigger at zero, all five argument
 properties empty, `fihop` and `fwupgrade` stopped, the ordinary ADB shell at UID
 2000, `manual_control=0`, and no payload, result, or CameraService dump in
 `/data/local/tmp`. This confirms the preflight and cleanup path only. No `lcc`
-process or camera-control request was executed. The later metadata-only update
-replaced the plan's placeholders with the values above and removed the
-unjustified guessed FPS argument; that updated plan line has not been re-run on
-the device, while the diagnostic and cleanup control flow is unchanged.
+process or camera-control request was executed.
+
+The extended payload was run again on 2026-08-09 after replacing the plan's
+placeholders and removing the unjustified guessed FPS argument. It again ended
+in `preflight=PASS`, now also confirming `ro.light.aos=1`, empty LCC mode,
+running `media` and `lightsvr`, unused UDP port 5000, no `lcc` process, and
+233,615,444 KiB free under `/data`. Host cleanup again left all six properties
+clear, `fihop` stopped, the normal ADB shell at UID 2000, both services running,
+and `manual_control=0`. No capture was executed.
