@@ -8,40 +8,68 @@
 PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
 export PATH
 
-[ "$0" = /data/local/tmp/light_l16_dark_frame_series_once.sh ] || {
-    printf 'refusing unexpected invocation path: %s\n' "$0" >&2
-    exit 2
-}
 [ "$#" -eq 0 ] || {
     printf 'refusing unexpected arguments\n' >&2
     exit 2
 }
 
-# Exposure axis first at gain 1.0, ascending time; then the gain axis at
-# 1.25 ms, ascending gain.  Three repeats per cell.  The exposure axis uses the
-# already exercised gain 1.0, so a refusal on the untested gain axis cannot
-# cost the exposure measurement.
-CAPTURE_PLAN='10000:1.0 10000:1.0 10000:1.0 1250000:1.0 1250000:1.0 1250000:1.0 5000000:1.0 5000000:1.0 5000000:1.0 20000000:1.0 20000000:1.0 20000000:1.0 1250000:2.0 1250000:2.0 1250000:2.0 1250000:3.75 1250000:3.75 1250000:3.75 1250000:4.0 1250000:4.0 1250000:4.0 1250000:7.5 1250000:7.5 1250000:7.5'
-EXPECTED_PLAN_COUNT=24
-EXPOSURE_AXIS_COUNT=12
-GAIN_AXIS_EXPOSURE=1250000
-
 RUN_AUTOFOCUS=no
 RUN_FACTORY_ASIC_RESET=no
 USE_A1_AF_SHIM=no
 USE_ASYNC_SHIM=yes
-
-OUT=/data/local/tmp/light_l16_dark_frame_series.result
-ARM_FILE=/data/local/tmp/light_l16_dark_frame_series.armed
-ARM_VALUE=DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE
-WORK_PREFIX=/data/local/tmp/light_l16_dark_frame_series_run
-MODE=DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE
 MASK0=FE
 MASK1=FF
 MASK2=01
-SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3 async_shim=required dark_frame_series=24_captures'
-CAPTURE_TIMEOUT_SECONDS=60
-MIN_DATA_FREE_KB=8388608
+
+case "$0" in
+    /data/local/tmp/light_l16_dark_frame_series_once.sh)
+        # Exposure axis first at gain 1.0, ascending time; then the gain axis
+        # at 1.25 ms, ascending gain.  Three repeats per cell.  The exposure
+        # axis uses the already exercised gain 1.0, so a refusal on the
+        # untested gain axis cannot cost the exposure measurement.
+        CAPTURE_PLAN='10000:1.0 10000:1.0 10000:1.0 1250000:1.0 1250000:1.0 1250000:1.0 5000000:1.0 5000000:1.0 5000000:1.0 20000000:1.0 20000000:1.0 20000000:1.0 1250000:2.0 1250000:2.0 1250000:2.0 1250000:3.75 1250000:3.75 1250000:3.75 1250000:4.0 1250000:4.0 1250000:4.0 1250000:7.5 1250000:7.5 1250000:7.5'
+        EXPECTED_PLAN_COUNT=24
+        EXPOSURE_AXIS_COUNT=12
+        GAIN_AXIS_EXPOSURE=1250000
+        ALLOWED_EXPOSURES='10000 1250000 5000000 20000000'
+        ALLOWED_GAINS='1.0 2.0 3.75 4.0 7.5'
+        OUT=/data/local/tmp/light_l16_dark_frame_series.result
+        ARM_FILE=/data/local/tmp/light_l16_dark_frame_series.armed
+        ARM_VALUE=DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_dark_frame_series_run
+        MODE=DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE
+        SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3 async_shim=required dark_frame_series=24_captures'
+        CAPTURE_TIMEOUT_SECONDS=60
+        MIN_DATA_FREE_KB=8388608
+        ;;
+    /data/local/tmp/light_l16_dark_frame_long_series_once.sh)
+        # Long exposure axis at gain 1.0, ascending, to reach the dark current
+        # the 20 ms series could not resolve.  The final cell repeats the
+        # first: their difference measures the thermal drift accumulated over
+        # the run, which is the term that made the short series' apparent
+        # slope uninterpretable.
+        CAPTURE_PLAN='100000000:1.0 100000000:1.0 100000000:1.0 1000000000:1.0 1000000000:1.0 1000000000:1.0 6000000000:1.0 6000000000:1.0 6000000000:1.0 29000000000:1.0 29000000000:1.0 29000000000:1.0 100000000:1.0 100000000:1.0 100000000:1.0'
+        EXPECTED_PLAN_COUNT=15
+        EXPOSURE_AXIS_COUNT=15
+        GAIN_AXIS_EXPOSURE=0
+        ALLOWED_EXPOSURES='100000000 1000000000 6000000000 29000000000'
+        ALLOWED_GAINS='1.0'
+        OUT=/data/local/tmp/light_l16_dark_frame_long_series.result
+        ARM_FILE=/data/local/tmp/light_l16_dark_frame_long_series.armed
+        ARM_VALUE=DARK_FRAME_LONG_SERIES_ALL16_15_CAPTURES_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_dark_frame_long_series_run
+        MODE=DARK_FRAME_LONG_SERIES_ALL16_15_CAPTURES_ONCE
+        SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3 async_shim=required dark_frame_long_series=15_captures'
+        # 29 s of integration plus readout and LRI writing; the 20 ms series
+        # needed about 16 s per capture for everything but integration.
+        CAPTURE_TIMEOUT_SECONDS=120
+        MIN_DATA_FREE_KB=8388608
+        ;;
+    *)
+        printf 'refusing unexpected invocation path: %s\n' "$0" >&2
+        exit 2
+        ;;
+esac
 DIAGNOSTIC_LOG_LINES=2000
 TUPLE0=11
 TUPLE1=F1
@@ -188,18 +216,18 @@ validate_plan() {
             ""|*[!0-9]*) fail invalid_plan_exposure_value ;;
         esac
         [ "$PLAN_EXPOSURE" -ge 10000 ] || fail plan_exposure_below_10000ns
-        [ "$PLAN_EXPOSURE" -le 20000000 ] || fail plan_exposure_above_20000000ns
-        case "$PLAN_EXPOSURE" in
-            10000|1250000|5000000|20000000) ;;
+        [ "$PLAN_EXPOSURE" -le 29981853000 ] || fail plan_exposure_above_sensor_ceiling
+        case " $ALLOWED_EXPOSURES " in
+            *" $PLAN_EXPOSURE "*) ;;
             *) fail invalid_plan_exposure_value ;;
         esac
-        case "$PLAN_GAIN" in
-            1.0|2.0|3.75|4.0|7.5) ;;
+        case " $ALLOWED_GAINS " in
+            *" $PLAN_GAIN "*) ;;
             *) fail invalid_plan_gain_value ;;
         esac
         if [ "$PLAN_INDEX" -le "$EXPOSURE_AXIS_COUNT" ]; then
             [ "$PLAN_GAIN" = "1.0" ] || fail exposure_axis_gain_not_one
-        else
+        elif [ "$GAIN_AXIS_EXPOSURE" != "0" ]; then
             [ "$PLAN_EXPOSURE" = "$GAIN_AXIS_EXPOSURE" ] || \
                 fail gain_axis_exposure_not_1250000
         fi

@@ -132,7 +132,6 @@ def test_dark_frame_decodes_as_a_flat_field() -> None:
         break
 
 
-@pytest.mark.skipif(not RETAINED.exists(), reason="retained all-16 LRI not present")
 def test_real_capture_decodes_into_sixteen_named_surfaces() -> None:
     from analyze_dark_frame_series import iter_module_surfaces
 

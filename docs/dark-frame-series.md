@@ -7,9 +7,8 @@ modules with the lens covered. It is the first repository experiment that
 varies `lcc -g` away from 1.0 and the first that issues more than one `lcc`
 capture inside a single root session.
 
-Nothing in this document has run on a camera yet. The plan, the argument
-construction, and the abort semantics are specified here so that the host
-tests and the payload hashes can be reviewed before a physical attempt.
+The series ran on the identified production camera on 2026-08-18 and completed
+all 24 captures. Its results are in the "First physical series" section below.
 
 The series answers four separate questions that the existing captures cannot:
 
@@ -73,11 +72,110 @@ room temperature the dark current contribution stays far below the read noise,
 while 1.25 ms is a more conservative choice than the never-exercised 10 us
 point. Holding it fixed also keeps the plan fully compiled in and hash-pinned.
 
+## First physical series, 2026-08-18
+
+The complete series ran on the identified production camera with the lens
+covered. All 24 captures completed, `supervisor_complete=PASS`, the settle gate
+held 23 times without a reboot, cleanup verified, and the single reboot
+followed. Every one of the 24 files transferred with the SHA-1 the camera
+recorded, and each is 259,999,993 bytes.
+
+### Requested exposure and gain both arrive unchanged
+
+| Requested | Recorded | Deviation |
+| --- | ---: | ---: |
+| 10 us | 10,443 ns | +4.43 % |
+| 1.25 ms | 1,253,260 ns | +0.26 % |
+| 5 ms | 5,002,599 ns | +0.05 % |
+| 20 ms | 19,999,956 ns | -0.00 % |
+
+Nothing was clamped or substituted. The deviation shrinks with duration, which
+is line-time quantization; the 10 us request lands essentially on the sensor
+floor that Camera2 reports as 10,449 ns.
+
+The gain question the series was built to answer resolves cleanly: **`lcc -g`
+is applied entirely as analog gain.** `sensor_digital_gain` stayed exactly
+1.00000 in all 24 captures, and `sensor_analog_gain` reproduced 2.0, 3.75, 4.0,
+and 7.5 exactly. The 4.0 point existed specifically to test whether an
+arbitrary value is rounded onto the neighbouring 3.75 step with a digital
+remainder. It is not. The analog gain is therefore finer-grained than the stock
+values 3.75 and 7.5 suggested, and the earlier observation of analog 3.75 with
+digital 1.03125 came from the stock application splitting a total gain, not
+from a sensor quantization.
+
+### The gain is applied before the ADC
+
+Read noise against gain, module A1 at 1.25 ms:
+
+| Gain | Read noise (DN) |
+| ---: | ---: |
+| 1.0 | 0.678 |
+| 2.0 | 0.925 |
+| 3.75 | 1.447 |
+| 4.0 | 1.503 |
+| 7.5 | 2.675 |
+
+Noise grows with gain but far less than proportionally. A least-squares fit of
+`sigma^2 = (g*a)^2 + b^2` gives **a = 0.348 DN** before the amplifier and
+**b = 0.598 DN** after it, and reproduces all five measurements to within 2 %.
+Purely digital gain would scale noise exactly with `g`, putting 5.085 DN at
+gain 7.5 where 2.675 DN was measured.
+
+The practical consequence is that analog gain buys real sensitivity: the
+input-referred noise falls from 0.692 DN at gain 1 to 0.357 DN at gain 7.5, a
+factor of 1.90, against a limit of 0.348 DN. That gain is 91 % exhausted at
+gain 4 and 98 % at gain 8; beyond that only headroom is lost, since saturation
+scales as 1023/g. The stock values 3.75 and 7.5 sit inside that useful range.
+
+### Sensor floor
+
+At 10 us and gain 1.0 all sixteen modules read a black level between 41.81 and
+42.20 DN, a spread of **0.39 DN across sixteen physically separate sensors**.
+Fixed pattern noise is 0.66 to 0.92 DN, with C2 the only mild outlier. The
+black level does not move with gain, so the pedestal is applied after
+amplification.
+
+### Dark current is below the noise floor here
+
+At room temperature and 20 ms or less, dark current is not measurable. The cell
+means across the exposure axis move non-monotonically within about 0.1 DN,
+which is drift over the six minutes of the run rather than an exposure effect.
+Resolving it needs second-scale integrations; Camera2 reports an exposure
+ceiling of 29.98 s, so a short follow-up series between 100 ms and 20 s would
+answer it.
+
+### Two errors in the analysis tool that only this data could expose
+
+The pixel packing was wrong. The tool assumed the byte-aligned MIPI CSI-2
+layout; the format is a continuous little-endian bitstream, LSB first. Against
+the covered lens the corrected reading gives a flat 42 DN field, while the
+previous reading produced four systematically different levels spanning 505 DN
+depending on a pixel's position within its five-byte group. This document
+previously claimed the ordering could not be determined empirically and did not
+affect any reported statistic. Both claims were wrong: a flat field determines
+it immediately, and every number would have been corrupted. An ordinary
+photograph cannot reveal it, because image content varies anyway.
+
+The dark current slope used only the first frame of each cell, letting
+per-frame drift enter as signal: it reported 2.824 DN/s for A1 where the cell
+means give 0.073 DN/s. The slope now averages the repeats and the report prints
+the scatter between repeats beside it.
+
 ## Payload identity
 
-The current 22,189-byte child payload has SHA-1 `cd3788ce22956b34ec69bb1466e81661b01241dd`. The supervisor, the
+The current 24,046-byte child payload has SHA-1 `a5bbf8d92927f73ca596d63c995b7b5a0adec494`. The supervisor, the
 Java source, and the build script each refuse a payload that does not match, so
 changing the plan requires deliberately updating every pin.
+
+The payload now carries two profiles, selected by invocation path: the 24-capture
+series described above, and a 15-capture long-exposure series at
+`light_l16_dark_frame_long_series_once.sh` that reaches for the dark current the
+short series could not resolve. Its exposure axis is 100 ms, 1 s, 6 s, and 29 s
+at gain 1.0, three repeats each, and its final cell repeats the first: the
+difference between them measures the thermal drift over the run, which is the
+term that made the short series' apparent slope uninterpretable. The 29 s point
+sits just below the 29.98 s ceiling Camera2 reports, and the per-capture timeout
+rises from 60 to 120 seconds.
 
 The packaged async writer shim is the reviewed 8,904-byte object with SHA-1
 `150e53a736624010dc7fb741490ea8dca7afbfb8`, which is reproducible only with

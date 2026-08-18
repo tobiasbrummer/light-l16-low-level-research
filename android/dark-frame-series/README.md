@@ -139,22 +139,27 @@ gain mapping. That tool needs NumPy; the rest of the repository does not.
 
 ## Validation status
 
-The device payloads, the app, the packaging, and the hash chain are host-tested,
-and the APK builds and verifies. **The series has not run on a camera.**
+The series completed on the identified production camera on 2026-08-18:
+24 of 24 captures, `supervisor_complete=PASS`, cleanup verified, one reboot.
+All 24 files transferred with the SHA-1 the camera recorded.
 
-Three parts have no physical precedent. The 10 us and 1.25 ms integration times
-have never been requested; the shortest physically confirmed value is 6.36 ms.
-Gains above 1.0 have never been requested through `lcc`, although the stock app
-reaches 3.75 and 7.5 through its own path. And 24 consecutive all-16 captures in
-one session have never been attempted; the longest prior sequence is one.
+The three parts that had no physical precedent all held. The 10 us and 1.25 ms
+integration times arrive unchanged. Gains above 1.0 arrive exactly and are
+applied entirely as analog gain. And 24 consecutive all-16 captures in one
+session ran without a single failed settle gate.
 
-The first result must be decoded before any claim about dark current, read
-noise, or gain quantization enters the documentation.
+Results are in [../../docs/dark-frame-series.md](../../docs/dark-frame-series.md).
+The one thing the series could not measure is dark current: at 20 ms and room
+temperature it stays below the noise floor.
+
+The darkness check thresholds were recalibrated after the first physical run.
+The original limits sat below what a covered lens actually reads at ISO 12800,
+so no amount of covering could pass them.
 
 ## Payload identity
 
 | Payload | Size | SHA-1 |
 | --- | ---: | --- |
-| `device/dark_frame_series_once.sh` | 22,189 | `cd3788ce22956b34ec69bb1466e81661b01241dd` |
-| `device/dark_frame_series_hostless_supervisor.sh` | 13,596 | `c45220fef42c2ad48b43f8f7bbb75d8f1d0cecdf` |
+| `device/dark_frame_series_once.sh` | 24,046 | `a5bbf8d92927f73ca596d63c995b7b5a0adec494` |
+| `device/dark_frame_series_hostless_supervisor.sh` | 13,596 | `e76430231963aa846dbd818406687f6bfabaa437` |
 | `liblcc_async_writer_shim.so` | 8,904 | `150e53a736624010dc7fb741490ea8dca7afbfb8` |

@@ -4,13 +4,13 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
-OUTPUT_DIR="$PROJECT_ROOT/.build/dark-frame-series"
-APK="$OUTPUT_DIR/light-l16-dark-frame-series-debug.apk"
-SUPERVISOR="$PROJECT_ROOT/device/dark_frame_series_hostless_supervisor.sh"
+OUTPUT_DIR="$PROJECT_ROOT/.build/dark-frame-long-series"
+APK="$OUTPUT_DIR/light-l16-dark-frame-long-series-debug.apk"
+SUPERVISOR="$PROJECT_ROOT/device/dark_frame_long_series_hostless_supervisor.sh"
 CHILD="$PROJECT_ROOT/device/dark_frame_series_once.sh"
 ASYNC_SHIM_BUILDER="$PROJECT_ROOT/host/build_lcc_async_shim.sh"
-EXPECTED_SUPERVISOR_SIZE=13596
-EXPECTED_SUPERVISOR_SHA256=13f248a44bd9dea996c60269bd3acdd4d995b445a05e9dfe5c4a1c5763f1b48f
+EXPECTED_SUPERVISOR_SIZE=13679
+EXPECTED_SUPERVISOR_SHA256=c850ab76be72df4abf977fe078ea8c8b4dc57b44b557461c0f3a2a28a1f510d2
 EXPECTED_CHILD_SIZE=24046
 EXPECTED_CHILD_SHA256=986862c12cabf8b28b1b5bda32c7e8d2bd10bde4e74d0f382cec34863bc7c6e3
 EXPECTED_ASYNC_SHIM_SIZE=8904
@@ -118,10 +118,10 @@ command -v javac >/dev/null 2>&1 || {
     exit 1
 }
 
-TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/light-l16-dark-frame-series.XXXXXX")
+TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/light-l16-dark-frame-long-series.XXXXXX")
 trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
 mkdir -p "$TEMP_DIR/classes" "$TEMP_DIR/dex" "$TEMP_DIR/assets" "$OUTPUT_DIR"
-cp "$SUPERVISOR" "$TEMP_DIR/assets/dark_frame_series_hostless_supervisor.sh"
+cp "$SUPERVISOR" "$TEMP_DIR/assets/dark_frame_long_series_hostless_supervisor.sh"
 cp "$CHILD" "$TEMP_DIR/assets/dark_frame_series_once.sh"
 ASYNC_SHIM="$TEMP_DIR/assets/liblcc_async_writer_shim.so"
 LLD=$(find_lld) || {
@@ -148,8 +148,8 @@ ASYNC_SHIM_SHA256=${ASYNC_SHIM_SHA256%% *}
 javac -source 8 -target 8 \
     -bootclasspath "$ANDROID_JAR" \
     -d "$TEMP_DIR/classes" \
-    "$SCRIPT_DIR/src/io/github/tobiasbrummer/lightl16/darkframe/MainActivity.java" \
-    "$SCRIPT_DIR/src/io/github/tobiasbrummer/lightl16/darkframe/DarknessCheck.java"
+    "$SCRIPT_DIR/src/io/github/tobiasbrummer/lightl16/darkframelong/MainActivity.java" \
+    "$SCRIPT_DIR/src/io/github/tobiasbrummer/lightl16/darkframelong/DarknessCheck.java"
 
 find "$TEMP_DIR/classes" -type f -name '*.class' -print \
     | sort > "$TEMP_DIR/classes.list"

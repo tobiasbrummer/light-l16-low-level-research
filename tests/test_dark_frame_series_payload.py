@@ -10,6 +10,10 @@ CHILD = ROOT / "device" / "dark_frame_series_once.sh"
 
 EXPOSURE_AXIS = ["10000", "1250000", "5000000", "20000000"]
 GAIN_AXIS = ["2.0", "3.75", "4.0", "7.5"]
+LONG_AXIS = ["100000000", "1000000000", "6000000000", "29000000000"]
+
+SHORT_PATH = "/data/local/tmp/light_l16_dark_frame_series_once.sh"
+LONG_PATH = "/data/local/tmp/light_l16_dark_frame_long_series_once.sh"
 
 
 def expected_plan() -> list[str]:
@@ -21,6 +25,35 @@ def expected_plan() -> list[str]:
     return entries
 
 
+def expected_long_plan() -> list[str]:
+    """Ascending exposures, then the first cell repeated as a drift anchor."""
+    entries = []
+    for exposure in LONG_AXIS:
+        entries.extend([f"{exposure}:1.0"] * 3)
+    entries.extend([f"{LONG_AXIS[0]}:1.0"] * 3)
+    return entries
+
+
+def plan_lines() -> list[str]:
+    return [
+        line.strip()
+        for line in CHILD.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("CAPTURE_PLAN=")
+    ]
+
+
+def plan_for(path: str) -> list[str]:
+    """The CAPTURE_PLAN of the profile selected by an invocation path."""
+    text = CHILD.read_text(encoding="utf-8")
+    start = text.index(f"    {path})")
+    end = text.index("        ;;", start)
+    line = next(
+        l.strip() for l in text[start:end].splitlines()
+        if l.strip().startswith("CAPTURE_PLAN=")
+    )
+    return line.split("=", 1)[1].strip().strip("'").split()
+
+
 def test_child_has_valid_shell_syntax() -> None:
     shell = shutil.which("sh")
     assert shell is not None
@@ -28,14 +61,36 @@ def test_child_has_valid_shell_syntax() -> None:
 
 
 def test_plan_is_exactly_the_specified_twenty_four_captures() -> None:
-    text = CHILD.read_text(encoding="utf-8")
-    plan_line = next(
-        line for line in text.splitlines() if line.startswith("CAPTURE_PLAN=")
-    )
-    value = plan_line.split("=", 1)[1].strip().strip("'")
-    entries = value.split()
+    entries = plan_for(SHORT_PATH)
     assert len(entries) == 24
     assert entries == expected_plan()
+
+
+def test_long_plan_ends_with_a_repeat_of_its_first_cell() -> None:
+    """The anchor is what makes the slope interpretable.
+
+    The 20 ms series could not separate a dark current from drift over the
+    run.  Repeating the opening cell at the end measures that drift directly.
+    """
+    entries = plan_for(LONG_PATH)
+    assert len(entries) == 15
+    assert entries == expected_long_plan()
+    assert entries[:3] == entries[-3:]
+    assert all(e.endswith(":1.0") for e in entries)
+
+
+def test_long_plan_stays_below_the_sensor_ceiling() -> None:
+    ceiling = 29981853000  # Camera2 reports this as the exposure maximum
+    for entry in plan_for(LONG_PATH):
+        assert int(entry.split(":")[0]) <= ceiling
+
+
+def test_both_profiles_are_selected_by_their_invocation_path() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    assert f"    {SHORT_PATH})" in text
+    assert f"    {LONG_PATH})" in text
+    assert "refusing unexpected invocation path" in text
+    assert "CAPTURE_TIMEOUT_SECONDS=120" in text  # the long profile needs it
 
 
 def test_exposure_axis_runs_first_and_holds_gain_one() -> None:
@@ -74,7 +129,7 @@ def test_child_validates_every_plan_entry_independently() -> None:
     assert "exposure_axis_gain_not_one" in text
     assert "gain_axis_exposure_not_1250000" in text
     assert "plan_exposure_below_10000ns" in text
-    assert "plan_exposure_above_20000000ns" in text
+    assert "plan_exposure_above_sensor_ceiling" in text
 
 
 def test_child_consumes_the_arm_token_before_any_device_state() -> None:
@@ -94,9 +149,7 @@ def extract_validator(overrides: str = "") -> str:
     asserting that its error strings appear in the file.
     """
     text = CHILD.read_text(encoding="utf-8")
-    plan_line = next(
-        line for line in text.splitlines() if line.startswith("CAPTURE_PLAN=")
-    )
+    plan_line = plan_lines()[0]
     start = text.index("validate_plan() {")
     end = text.index("\n}\n", start) + len("\n}\n")
     validator = text[start:end]
@@ -106,13 +159,13 @@ def extract_validator(overrides: str = "") -> str:
         "    exit 1\n"
         "}\n"
     )
-    constants = "\n".join(
-        line
-        for line in text.splitlines()
-        if line.startswith(
-            ("EXPECTED_PLAN_COUNT=", "EXPOSURE_AXIS_COUNT=", "GAIN_AXIS_EXPOSURE=")
-        )
-    )
+    constants = "\n".join([
+        "EXPECTED_PLAN_COUNT=24",
+        "EXPOSURE_AXIS_COUNT=12",
+        "GAIN_AXIS_EXPOSURE=1250000",
+        "ALLOWED_EXPOSURES='10000 1250000 5000000 20000000'",
+        "ALLOWED_GAINS='1.0 2.0 3.75 4.0 7.5'",
+    ])
     return "\n".join(
         [
             stub,
@@ -452,7 +505,13 @@ def test_repository_readme_links_the_dark_frame_series() -> None:
     assert "dark frame" in readme.lower()
 
 
-def test_app_readme_states_the_plan_and_the_unrun_status() -> None:
+def test_app_readme_states_the_plan_and_the_measured_status() -> None:
+    """The README must carry the plan and a dated, concrete run status.
+
+    This originally asserted the series had not run.  It has, so the check now
+    requires the outcome to be stated rather than the absence of one -- and
+    still requires the one thing the series could not measure to be named.
+    """
     readme = (ROOT / "android" / "dark-frame-series" / "README.md").read_text(
         encoding="utf-8"
     )
@@ -462,4 +521,6 @@ def test_app_readme_states_the_plan_and_the_unrun_status() -> None:
         assert exposure in readme
     for gain in ("2.0", "3.75", "4.0", "7.5"):
         assert gain in readme
-    assert "has not" in readme.lower()
+    assert "2026-08-18" in readme
+    assert "24 of 24" in readme
+    assert "could not measure" in readme

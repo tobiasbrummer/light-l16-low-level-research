@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # SPDX-License-Identifier: MIT
-# Fixed hostless supervisor for exactly one 24-capture all-16 dark frame
-# series.
+# Fixed hostless supervisor for exactly one 15-capture all-16 long-exposure
+# dark frame series.
 #
 # This is deliberately not a general root bridge.  It accepts no arguments,
 # verifies the exact reviewed child and async-writer payloads, invokes only the
@@ -16,25 +16,25 @@
 PATH=/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
 export PATH
 
-APP_DIR=/data/data/io.github.tobiasbrummer.lightl16.darkframe/files
+APP_DIR=/data/data/io.github.tobiasbrummer.lightl16.darkframelong/files
 SUPERVISOR=$APP_DIR/s.sh
 APP_CHILD=$APP_DIR/c.sh
 APP_ASYNC_SHIM=$APP_DIR/n.so
 APP_RESULT=$APP_DIR/r.txt
 APP_ARM=$APP_DIR/a
-APP_ARM_VALUE=L16_HOSTLESS_DARK_FRAME_SERIES_SUPERVISOR_ONCE_V1
+APP_ARM_VALUE=L16_HOSTLESS_DARK_FRAME_LONG_SERIES_SUPERVISOR_ONCE_V1
 
-CHILD=/data/local/tmp/light_l16_dark_frame_series_once.sh
-CHILD_RESULT=/data/local/tmp/light_l16_dark_frame_series.result
-CHILD_ARM=/data/local/tmp/light_l16_dark_frame_series.armed
-CHILD_ARM_VALUE=DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE
+CHILD=/data/local/tmp/light_l16_dark_frame_long_series_once.sh
+CHILD_RESULT=/data/local/tmp/light_l16_dark_frame_long_series.result
+CHILD_ARM=/data/local/tmp/light_l16_dark_frame_long_series.armed
+CHILD_ARM_VALUE=DARK_FRAME_LONG_SERIES_ALL16_15_CAPTURES_ONCE
 ASYNC_SHIM=/data/local/tmp/liblcc_async_writer_shim.so
 EXPECTED_CHILD_SIZE=24046
 EXPECTED_CHILD_SHA1=a5bbf8d92927f73ca596d63c995b7b5a0adec494
 EXPECTED_ASYNC_SHIM_SIZE=8904
 EXPECTED_ASYNC_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8
-EXPECTED_MODE=DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE
-EXPECTED_CAPTURES_REQUESTED=24
+EXPECTED_MODE=DARK_FRAME_LONG_SERIES_ALL16_15_CAPTURES_ONCE
+EXPECTED_CAPTURES_REQUESTED=15
 EXPECTED_IDENTITY='uid=0(root) gid=0(root) groups=0(root)'
 EXPECTED_CONTEXT=u:r:qti_init_shell:s0
 
@@ -144,8 +144,8 @@ trap 'SUPERVISOR_REASON=signal_hup; exit 129' HUP
 trap 'SUPERVISOR_REASON=signal_int; exit 130' INT
 trap 'SUPERVISOR_REASON=signal_term; exit 143' TERM
 
-printf 'supervisor=L16_HOSTLESS_DARK_FRAME_SERIES_V1\n'
-printf 'policy=single_fixed_24_capture_all16_dark_frame_series_then_reboot\n'
+printf 'supervisor=L16_HOSTLESS_DARK_FRAME_LONG_SERIES_V1\n'
+printf 'policy=single_fixed_15_capture_all16_dark_frame_long_series_then_reboot\n'
 
 [ "$0" = "$SUPERVISOR" ] || fail unexpected_supervisor_path
 [ -f "$APP_ARM" ] || fail app_arm_missing
@@ -312,8 +312,8 @@ esac
 [ "$MEDIA_AFTER" = "running" ] || fail child_media_not_running
 [ "$LIGHTSVR_AFTER" = "running" ] || fail child_lightsvr_not_running
 case "$WORKDIR" in
-    /data/local/tmp/light_l16_dark_frame_series_run.*)
-        WORK_PID=${WORKDIR#/data/local/tmp/light_l16_dark_frame_series_run.}
+    /data/local/tmp/light_l16_dark_frame_long_series_run.*)
+        WORK_PID=${WORKDIR#/data/local/tmp/light_l16_dark_frame_long_series_run.}
         case "$WORK_PID" in
             ""|*[!0-9]*) fail child_workdir_invalid ;;
         esac
@@ -338,10 +338,10 @@ if [ "$CHILD_FINAL_STATUS" = "PASS" ] && \
     [ "$CAPTURES_COMPLETED" = "$EXPECTED_CAPTURES_REQUESTED" ]
 then
     SUPERVISOR_STATUS=PASS
-    SUPERVISOR_REASON=full_dark_frame_series_recorded_and_child_cleanup_verified
+    SUPERVISOR_REASON=full_dark_frame_long_series_recorded_and_child_cleanup_verified
 else
     SUPERVISOR_STATUS=PARTIAL
-    SUPERVISOR_REASON=partial_dark_frame_series_recorded_and_child_cleanup_verified
+    SUPERVISOR_REASON=partial_dark_frame_long_series_recorded_and_child_cleanup_verified
 fi
-SUPERVISOR_DECISION=normal_reboot_after_dark_frame_series
+SUPERVISOR_DECISION=normal_reboot_after_dark_frame_long_series
 exit 0

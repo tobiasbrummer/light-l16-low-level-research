@@ -1,4 +1,4 @@
-package io.github.tobiasbrummer.lightl16.darkframe;
+package io.github.tobiasbrummer.lightl16.darkframelong;
 
 import android.Manifest;
 import android.app.Activity;
@@ -59,9 +59,9 @@ public final class MainActivity extends Activity {
     private static final String SELINUX_ENFORCE_PATH = "/sys/fs/selinux/enforce";
 
     private static final String PRIVATE_DIR =
-        "/data/data/io.github.tobiasbrummer.lightl16.darkframe/files";
+        "/data/data/io.github.tobiasbrummer.lightl16.darkframelong/files";
     private static final String USER_ZERO_PRIVATE_DIR =
-        "/data/user/0/io.github.tobiasbrummer.lightl16.darkframe/files";
+        "/data/user/0/io.github.tobiasbrummer.lightl16.darkframelong/files";
     private static final String SUPERVISOR_PATH = PRIVATE_DIR + "/s.sh";
     private static final String CHILD_PATH = PRIVATE_DIR + "/c.sh";
     private static final String ASYNC_SHIM_PATH = PRIVATE_DIR + "/n.so";
@@ -69,17 +69,17 @@ public final class MainActivity extends Activity {
     private static final String ARM_PATH = PRIVATE_DIR + "/a";
     private static final String SPENT_NAME = "spent";
     private static final String DISPLAY_REPORT_NAME =
-        "light-l16-dark-frame-series-last-display.txt";
+        "light-l16-dark-frame-long-series-last-display.txt";
     private static final String RUNNER_PROGRAM = "/system/bin/sh";
 
     private static final String SUPERVISOR_ASSET =
-        "dark_frame_series_hostless_supervisor.sh";
+        "dark_frame_long_series_hostless_supervisor.sh";
     private static final String CHILD_ASSET = "dark_frame_series_once.sh";
     private static final String ASYNC_SHIM_ASSET =
         "liblcc_async_writer_shim.so";
-    private static final long EXPECTED_SUPERVISOR_SIZE = 13596L;
+    private static final long EXPECTED_SUPERVISOR_SIZE = 13679L;
     private static final String EXPECTED_SUPERVISOR_SHA256 =
-        "13f248a44bd9dea996c60269bd3acdd4d995b445a05e9dfe5c4a1c5763f1b48f";
+        "c850ab76be72df4abf977fe078ea8c8b4dc57b44b557461c0f3a2a28a1f510d2";
     private static final long EXPECTED_CHILD_SIZE = 24046L;
     private static final String EXPECTED_CHILD_SHA256 =
         "986862c12cabf8b28b1b5bda32c7e8d2bd10bde4e74d0f382cec34863bc7c6e3";
@@ -87,15 +87,15 @@ public final class MainActivity extends Activity {
     private static final String EXPECTED_ASYNC_SHIM_SHA256 =
         "bbc6865374dfd7beb72d4a1cc30fad81414c6915052eb22e35c5205574ae9cb5";
     private static final String ARM_VALUE =
-        "L16_HOSTLESS_DARK_FRAME_SERIES_SUPERVISOR_ONCE_V1";
+        "L16_HOSTLESS_DARK_FRAME_LONG_SERIES_SUPERVISOR_ONCE_V1";
     private static final String SPENT_VALUE =
-        "L16_HOSTLESS_DARK_FRAME_SERIES_SPENT_V1";
+        "L16_HOSTLESS_DARK_FRAME_LONG_SERIES_SPENT_V1";
 
     private static final long ARM_WINDOW_MS = 60000L;
     private static final long POLL_TIMEOUT_MS = 2460000L;
     private static final long POLL_INTERVAL_MS = 250L;
     private static final long SETTLE_TIMEOUT_MS = 5000L;
-    private static final String EXPECTED_CAPTURES = "24";
+    private static final String EXPECTED_CAPTURES = "15";
     private static final int CAMERA_PERMISSION_REQUEST = 1;
     private static final long MAX_RESULT_SIZE = 65536L;
 
@@ -141,20 +141,20 @@ public final class MainActivity extends Activity {
 
         TextView explanation = new TextView(this);
         explanation.setText(
-            "Dunkelbildserie: 24 Aufnahmen aller 16 Module bei abgedecktem "
-                + "Objektiv, in einer einzigen Root-Sitzung. Zuerst vier "
-                + "Belichtungszeiten (10 us, 1,25 ms, 5 ms, 20 ms) bei Gain 1, "
-                + "danach vier Gains (2,0 / 3,75 / 4,0 / 7,5) bei 1,25 ms, "
-                + "jeweils drei Wiederholungen.\n\n"
-                + "Zwischen den Aufnahmen wird nicht neu gestartet, sondern die "
-                + "Kamera geprüft. Die Serie stoppt bei der ersten fehlerhaften "
-                + "Prüfung; bereits geschriebene Bilder bleiben erhalten und "
-                + "werden aufgelistet.\n\n"
-                + "Dauer etwa 25 Minuten, Speicherbedarf etwa 6,3 GB. Am Ende "
-                + "folgt genau ein normaler Neustart. Die LRIs bleiben unter "
-                + "/sdcard/DCIM/camera.\n\n"
-                + "Vorher das Objektiv vollständig abdecken und die normale "
-                + "Kamera-App schließen."
+            "Langzeit-Dunkelserie: 15 Aufnahmen aller 16 Module bei "
+                + "abgedecktem Objektiv, in einer Root-Sitzung. Vier "
+                + "Belichtungszeiten bei Gain 1 (100 ms, 1 s, 6 s, 29 s), "
+                + "je drei Wiederholungen. Danach wird die 100-ms-Zelle "
+                + "wiederholt: die Differenz misst die Waermedrift ueber "
+                + "den Lauf.\n\n"
+                + "Ziel ist der Dunkelstrom, den die 20-ms-Serie nicht "
+                + "aufloesen konnte. Die 29 s liegen nahe an der "
+                + "Sensorgrenze von 29,98 s und wurden noch nie "
+                + "angefordert.\n\n"
+                + "Dauer etwa 6 Minuten, Speicherbedarf etwa 3,9 GB. Am "
+                + "Ende folgt genau ein normaler Neustart.\n\n"
+                + "Vorher das Objektiv vollstaendig abdecken und die "
+                + "normale Kamera-App schliessen."
         );
         body.addView(explanation);
 
@@ -180,7 +180,7 @@ public final class MainActivity extends Activity {
         body.addView(darknessButton);
 
         captureButton = new Button(this);
-        captureButton.setText("3. DUNKELBILDSERIE STARTEN (24 AUFNAHMEN)");
+        captureButton.setText("3. LANGZEIT-DUNKELSERIE STARTEN (15 AUFNAHMEN)");
         captureButton.setEnabled(false);
         captureButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -421,7 +421,7 @@ public final class MainActivity extends Activity {
         darknessButton.setEnabled(false);
         captureButton.setEnabled(false);
         setOutputText(
-            "Die Serie läuft. 24 Aufnahmen aller 16 Module, etwa 25 Minuten. "
+            "Die Serie läuft. 15 Aufnahmen aller 16 Module, etwa 6 Minuten. "
                 + "Das Display darf an bleiben; die App wartet auf das "
                 + "Supervisor-Manifest und danach auf den Neustart …\n"
         );
@@ -910,17 +910,17 @@ public final class MainActivity extends Activity {
     }
 
     private static boolean validSeriesResult(String text) {
-        return "L16_HOSTLESS_DARK_FRAME_SERIES_V1".equals(
+        return "L16_HOSTLESS_DARK_FRAME_LONG_SERIES_V1".equals(
                 field(text, "supervisor"))
             && "yes".equals(field(text, "child_started"))
             && "yes".equals(field(text, "capture_attempted"))
             && EXPECTED_CAPTURES.equals(field(text, "captures_requested"))
-            && "normal_reboot_after_dark_frame_series".equals(
+            && "normal_reboot_after_dark_frame_long_series".equals(
                 field(text, "supervisor_decision"));
     }
 
     private static boolean validPreflightFailure(String text) {
-        return "L16_HOSTLESS_DARK_FRAME_SERIES_V1".equals(
+        return "L16_HOSTLESS_DARK_FRAME_LONG_SERIES_V1".equals(
                 field(text, "supervisor"))
             && "PREFLIGHT_FAIL".equals(field(text, "supervisor_complete"))
             && "yes".equals(field(text, "child_started"))
