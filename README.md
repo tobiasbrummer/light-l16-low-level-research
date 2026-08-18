@@ -53,12 +53,35 @@ capture only for the exact production build and fixed profiles documented
 here. It does not yet claim that every arbitrary subset has been exercised,
 nanosecond-level inter-sensor synchronization, direct focus or mirror control,
 or a general safe camera-control API.
+- A 24-capture all-16 dark frame series completed on 2026-08-18. It is the
+  first profile here to issue more than one `lcc` capture per root session:
+  a settle gate between captures replaced the reboot-after-every-attempt
+  policy and held 23 times, cleanup verified, and a single reboot followed.
+  All four requested integration times arrive unchanged, with 10 us landing on
+  the sensor floor at 10,443 ns.
+- `lcc -g` is applied entirely as analog gain. `sensor_digital_gain` stayed
+  exactly 1.0 across all 24 captures while `sensor_analog_gain` reproduced
+  2.0, 3.75, 4.0, and 7.5 exactly, so an arbitrary request is not rounded onto
+  a neighbouring step with a digital remainder. Read noise against gain fits
+  `sigma^2 = (g*0.348 DN)^2 + (0.598 DN)^2` to within 2 %, placing the
+  amplifier before the ADC: input-referred noise falls from 0.692 DN at gain 1
+  to 0.357 DN at gain 7.5, which is 91 % of the achievable gain already at 4.
+- At 10 us and gain 1.0 all sixteen modules read a black level between 41.81
+  and 42.20 DN, a spread of 0.39 DN, with 0.66 to 0.92 DN of fixed pattern
+  noise. Dark current stays below the noise floor at 20 ms and room
+  temperature; resolving it needs second-scale integrations.
+- The same series disproved this repository's assumption about the RAW10 pixel
+  packing. It is a continuous little-endian bitstream, LSB first, not the
+  byte-aligned MIPI CSI-2 layout. Only a flat dark field could reveal it,
+  because an ordinary photograph hides the difference in image content.
 
 ## Documentation
 
 - [Private driver ABI and data flow](docs/driver-abi.md)
 - [Factory module selection, A1/all-16 tests, and bounded one-shot wrapper](docs/lcc-control.md)
 - [Temporary root runner](docs/temporary-root.md)
+- [All-16 dark frame series](docs/dark-frame-series.md)
+- [Hostless all-16 dark frame series app](android/dark-frame-series/README.md)
 - [Reproducing the offline analysis](docs/reproduction.md)
 - [Security policy and device-safety boundary](SECURITY.md)
 - [Contributors and AI-assistance disclosure](CONTRIBUTORS.md)
