@@ -24,6 +24,28 @@ tool only.
 **Spec:** `docs/dark-frame-series.md`. Read it before starting. Every value
 below is taken from it.
 
+## Status: complete, not yet run on a camera
+
+All eight tasks are implemented and committed on branch `dark-frame-series`.
+The full test suite passes and the APK builds and verifies.
+
+Three things turned out differently from the plan as written:
+
+- The plan's verification of the RAW10 bit order (`max() <= 1023`) cannot
+  distinguish the two candidate orderings, because they differ by at most
+  3 DN. The order is therefore documented as an assumption that follows MIPI
+  CSI-2, not as a measurement. It affects no reported statistic.
+- Task 8's first step had to find where the pixels live. They sit before the
+  protobuf message, and each surface carries its own offset in surface field 5,
+  which `verify_stock_capture.py` does not read.
+- The device payloads and the supervisor verdict are tested by execution
+  rather than only by string assertions: the plan's static checks could not
+  reach the loop's abort arithmetic or the PASS/PARTIAL selection.
+
+What remains is physical: cover the lens, run the series, pull the frames, and
+decode them with `tools/analyze_dark_frame_series.py` before any radiometric
+claim enters the documentation.
+
 ## Global Constraints
 
 - Target build `00WW_1_351`, LightOS 1.3.5.1, kernel `3.18.20-perf-g32d1d1c`, SELinux permissive.
@@ -66,7 +88,7 @@ capture.
 - Consumes: nothing from earlier tasks.
 - Produces: the invocation path `/data/local/tmp/light_l16_dark_frame_series_once.sh`, the arm file `/data/local/tmp/light_l16_dark_frame_series.armed` with value `DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE`, the result file `/data/local/tmp/light_l16_dark_frame_series.result`, and the shell variable `CAPTURE_PLAN` holding 24 `<exposure_ns>:<gain>` tokens.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_dark_frame_series_payload.py`:
 
@@ -159,12 +181,12 @@ def test_child_consumes_the_arm_token_before_any_device_state() -> None:
     assert text.index("setprop persist.sys.fihop 0") < text.index(': > "$OUT"')
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_dark_frame_series_payload.py -v`
 Expected: all tests FAIL, because `device/dark_frame_series_once.sh` does not exist.
 
-- [ ] **Step 3: Create the child script header, plan, and constants**
+- [x] **Step 3: Create the child script header, plan, and constants**
 
 Create `device/dark_frame_series_once.sh` starting with:
 
@@ -246,7 +268,7 @@ MEDIA_AFTER=unknown
 LIGHTSVR_AFTER=unknown
 ```
 
-- [ ] **Step 4: Copy the helper functions**
+- [x] **Step 4: Copy the helper functions**
 
 Copy `device/a1_capture_once.sh` lines 231-329 verbatim into the new script:
 `clear_runner`, `manual_is_zero`, `force_manual_zero`, `camera_clients_none`,
@@ -254,7 +276,7 @@ Copy `device/a1_capture_once.sh` lines 231-329 verbatim into the new script:
 `capture_diagnostics`, and `fail`. Omit `read_decimal_tid`, which only the
 autofocus path uses.
 
-- [ ] **Step 5: Add the plan validation**
+- [x] **Step 5: Add the plan validation**
 
 Insert after the helper functions:
 
@@ -290,7 +312,7 @@ validate_plan() {
 }
 ```
 
-- [ ] **Step 6: Add the setup, traps, and arm consumption**
+- [x] **Step 6: Add the setup, traps, and arm consumption**
 
 Copy `device/a1_capture_once.sh` lines 500-528 verbatim (from the
 `clear_runner` call through `printf 'workdir_created=%s\n' "$WORKDIR"`), then
@@ -315,7 +337,7 @@ finish() {
 }
 ```
 
-- [ ] **Step 7: Add behavioural tests for the validator**
+- [x] **Step 7: Add behavioural tests for the validator**
 
 The assertions above only prove that the error strings appear in the file.
 `validate_plan` is plain POSIX shell with no Android dependency, so extract it
@@ -330,12 +352,12 @@ Then assert one case per refusal path: the compiled plan passes and reports
 `gain_axis_exposure_not_1250000`; and a non-numeric exposure gives
 `invalid_plan_exposure_value`.
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_dark_frame_series_payload.py -v`
 Expected: all 14 tests PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add device/dark_frame_series_once.sh tests/test_dark_frame_series_payload.py
@@ -358,7 +380,7 @@ semantics.
 - Consumes: `CAPTURE_PLAN`, `validate_plan`, and the helper functions from Task 1.
 - Produces: the result file keys `mode`, `captures_requested`, `captures_completed`, `capture_plan`, `series_aborted_at`, `series_abort_reason`, `capture_<index>_exposure_ns`, `capture_<index>_gain`, `capture_<index>_lri_path`, `capture_<index>_lri_size`, `capture_<index>_lri_sha1`, `cleanup_ok`, `capture_attempted`, `normal_reboot_required`, `workdir`, `final_status`, `final_reason`. `final_status` is one of `PASS`, `PARTIAL`, `FAIL`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/test_dark_frame_series_payload.py`:
 
@@ -413,12 +435,12 @@ def test_capture_attempt_forces_a_reboot_request() -> None:
     assert "NORMAL_REBOOT_REQUIRED=yes" in text
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_dark_frame_series_payload.py -v`
 Expected: the six new tests FAIL; the seven from Task 1 still PASS.
 
-- [ ] **Step 3: Add the preflight**
+- [x] **Step 3: Add the preflight**
 
 Copy `device/a1_capture_once.sh` lines 529-664 into the new script, after the
 `validate_plan` call. This is the identity, build, kernel, SELinux, service,
@@ -427,7 +449,7 @@ Drop the `RUN_FACTORY_ASIC_RESET` and autofocus branches, which are `no` here.
 Then copy lines 666-690: diagnostics, the pre-capture camera client check, the
 `lcc` copy with its hash check, and the async shim copy with its hash check.
 
-- [ ] **Step 4: Add the capture series loop**
+- [x] **Step 4: Add the capture series loop**
 
 Insert after the preflight:
 
@@ -479,7 +501,7 @@ for PLAN_ENTRY in $CAPTURE_PLAN; do
 done
 ```
 
-- [ ] **Step 5: Add the settle, record, and abort helpers**
+- [x] **Step 5: Add the settle, record, and abort helpers**
 
 Insert these before the loop, after `validate_plan`:
 
@@ -586,7 +608,7 @@ redirected into the result file, and the caller returns 1 on the next line.
 Do not write `return $(abort_series ...)`: command substitution would swallow
 the printed reason and hand `return` a string instead of a status.
 
-- [ ] **Step 6: Add the final status and finish handler**
+- [x] **Step 6: Add the final status and finish handler**
 
 After the loop:
 
@@ -644,7 +666,7 @@ finish() {
 }
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_dark_frame_series_payload.py -v`
 Expected: all 13 tests PASS.
@@ -652,7 +674,7 @@ Expected: all 13 tests PASS.
 Also run: `sh -n device/dark_frame_series_once.sh`
 Expected: no output, exit 0.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add device/dark_frame_series_once.sh tests/test_dark_frame_series_payload.py
@@ -677,7 +699,7 @@ reboots after any possible camera attempt.
 - Produces: the app-visible result at `/data/data/io.github.tobiasbrummer.lightl16.darkframe/files/r.txt`, containing `supervisor=L16_HOSTLESS_DARK_FRAME_SERIES_V1`, `supervisor_complete` (`PASS`, `PARTIAL`, `PREFLIGHT_FAIL`, or `FAIL`), `supervisor_decision`, `captures_completed`, `captures_requested`, and the mirrored per-capture lines.
 - App arm token: `L16_HOSTLESS_DARK_FRAME_SERIES_SUPERVISOR_ONCE_V1` at `<private>/a`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_dark_frame_series_supervisor.py`:
 
@@ -773,12 +795,12 @@ def test_supervisor_clears_the_runner_before_any_other_action() -> None:
     assert PRIVATE_DIR in text
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_dark_frame_series_supervisor.py -v`
 Expected: all 9 tests FAIL, because the supervisor does not exist.
 
-- [ ] **Step 3: Create the supervisor from the established pattern**
+- [x] **Step 3: Create the supervisor from the established pattern**
 
 Copy `device/a1_hostless_capture_supervisor.sh` to
 `device/dark_frame_series_hostless_supervisor.sh` and apply these changes:
@@ -799,7 +821,7 @@ Copy `device/a1_hostless_capture_supervisor.sh` to
 /system/bin/timeout -k 10s 2400s /system/bin/sh "$CHILD"
 ```
 
-- [ ] **Step 4: Replace the single-capture result checks with series checks**
+- [x] **Step 4: Replace the single-capture result checks with series checks**
 
 Replace the block from `RESULT_MODE=$(result_field mode)` to the end with:
 
@@ -872,12 +894,12 @@ case "$CHILD_FINAL_STATUS" in
 esac
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_dark_frame_series_supervisor.py -v`
 Expected: all 9 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add device/dark_frame_series_hostless_supervisor.sh tests/test_dark_frame_series_supervisor.py
@@ -902,7 +924,7 @@ check has not run.
 - Consumes: the supervisor arm token and result keys from Task 3.
 - Produces: the private payload paths `<private>/s.sh` (supervisor), `<private>/c.sh` (child), `<private>/n.so` (async shim), `<private>/r.txt` (result), `<private>/a` (arm token); the external mirror `/sdcard/Android/data/io.github.tobiasbrummer.lightl16.darkframe/files/light-l16-dark-frame-series-last-display.txt`; and the Java method `void onDarknessCheckResult(boolean dark, String report)`, which Task 5 calls.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_android_dark_frame_series.py`:
 
@@ -991,12 +1013,12 @@ def test_app_mirrors_its_report_without_extra_storage_permission() -> None:
     assert "getExternalFilesDir" in source
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_android_dark_frame_series.py -v`
 Expected: all 7 tests FAIL, because the app does not exist.
 
-- [ ] **Step 3: Write the manifest**
+- [x] **Step 3: Write the manifest**
 
 Create `android/dark-frame-series/AndroidManifest.xml`:
 
@@ -1032,7 +1054,7 @@ The camera permission is required because the darkness check in Task 5 opens
 Camera2. It is the only permission; the report mirror uses
 `getExternalFilesDir`, which needs none on this API level.
 
-- [ ] **Step 4: Write MainActivity**
+- [x] **Step 4: Write MainActivity**
 
 Copy `android/a1-capture/src/io/github/tobiasbrummer/lightl16/a1capture/MainActivity.java`
 as the base and apply these changes:
@@ -1088,12 +1110,12 @@ as the base and apply these changes:
 - Raise `MAX_RESULT_SIZE` from `16384L` to `65536L`: the mirrored manifest adds
   24 capture lines plus the per-capture keys, which do not fit the old bound.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_android_dark_frame_series.py -v`
 Expected: all 7 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add android/dark-frame-series tests/test_android_dark_frame_series.py
@@ -1118,7 +1140,7 @@ can fire.
 - Consumes: `MainActivity.onDarknessCheckResult(boolean, String)` from Task 4.
 - Produces: `DarknessCheck.start(Activity, Callback)` and `DarknessCheck.close()`, where `Callback` is `void onResult(boolean dark, String report)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_android_dark_frame_series.py`:
 
@@ -1157,12 +1179,12 @@ def test_main_activity_closes_camera_before_arming_the_runner() -> None:
     )
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_android_dark_frame_series.py -v`
 Expected: the four new tests FAIL.
 
-- [ ] **Step 3: Write DarknessCheck**
+- [x] **Step 3: Write DarknessCheck**
 
 Base it on the Camera2 pipeline in
 `android/hdr-meter-probe/src/io/github/tobiasbrummer/lightl16/hdrmeterprobe/MainActivity.java`:
@@ -1197,7 +1219,7 @@ values can be tightened afterwards.
 Close the camera in a `finally` block before invoking `onResult`, so no path
 leaves a Camera2 client open when the root trigger fires.
 
-- [ ] **Step 4: Wire it into MainActivity**
+- [x] **Step 4: Wire it into MainActivity**
 
 The middle button calls `darknessCheck.start(this, callback)`; the callback
 calls `onDarknessCheckResult`. In the capture handler, close the camera and
@@ -1218,12 +1240,12 @@ prove it is closed before arming the runner:
 independently re-checks this through `dumpsys media.camera` before it touches
 `lcc`, so this is the app-side half of a two-sided check, not the only one.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_android_dark_frame_series.py -v`
 Expected: all 11 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add android/dark-frame-series tests/test_android_dark_frame_series.py
@@ -1247,7 +1269,7 @@ must run after Tasks 1-5, because every pinned hash covers a finished file.
 - Consumes: all files from Tasks 1-5.
 - Produces: `.build/dark-frame-series/light-l16-dark-frame-series-debug.apk`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_android_dark_frame_series.py`:
 
@@ -1294,12 +1316,12 @@ def test_all_three_layers_pin_the_same_values() -> None:
     assert f"EXPECTED_ASYNC_SHIM_SHA1={EXPECTED_ASYNC_SHIM_SHA1}" in supervisor
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_android_dark_frame_series.py -v`
 Expected: the three new tests FAIL.
 
-- [ ] **Step 3: Write the build script**
+- [x] **Step 3: Write the build script**
 
 Copy `android/a1-capture/build_debug_apk.sh` and change:
 
@@ -1316,7 +1338,7 @@ javac -source 8 -target 8 \
     "$SCRIPT_DIR/src/io/github/tobiasbrummer/lightl16/darkframe/DarknessCheck.java"
 ```
 
-- [ ] **Step 4: Fill in the real hashes**
+- [x] **Step 4: Fill in the real hashes**
 
 Compute and paste the actual values, in this order, because each layer pins the
 one before it:
@@ -1339,18 +1361,18 @@ Put supervisor and child sizes and SHA-256 values into `MainActivity.java` and
 into the build script. Changing the supervisor after pinning it invalidates the
 pin, so this order is not optional.
 
-- [ ] **Step 5: Build the APK**
+- [x] **Step 5: Build the APK**
 
 Run: `android/dark-frame-series/build_debug_apk.sh`
 Expected: prints `apk=` and a SHA-256, exits 0. If it refuses a payload, a hash
 in Step 4 is stale.
 
-- [ ] **Step 6: Run the full test suite**
+- [x] **Step 6: Run the full test suite**
 
 Run: `python -m pytest -v`
 Expected: all tests PASS, including the pre-existing ones.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add android/dark-frame-series device/dark_frame_series_hostless_supervisor.sh tests/test_android_dark_frame_series.py
@@ -1367,7 +1389,7 @@ git commit -m "Build dark frame series APK with pinned payloads"
 - Modify: `docs/dark-frame-series.md`
 - Modify: `tests/test_dark_frame_series_payload.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/test_dark_frame_series_payload.py`:
 
@@ -1388,12 +1410,12 @@ def test_repository_readme_links_the_dark_frame_series() -> None:
     assert "dark frame" in readme.lower()
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_dark_frame_series_payload.py -v`
 Expected: the two new tests FAIL.
 
-- [ ] **Step 3: Write the app README**
+- [x] **Step 3: Write the app README**
 
 Create `android/dark-frame-series/README.md` following the structure of
 `android/a1-capture/README.md`: purpose, the compiled-in plan as a table, the
@@ -1402,7 +1424,7 @@ safety and recovery policy, build, one-time installation with the exact
 expected success markers, and the validation status. State plainly that the
 series has not run on a camera.
 
-- [ ] **Step 4: Add the payload pin to the spec**
+- [x] **Step 4: Add the payload pin to the spec**
 
 Add to `docs/dark-frame-series.md`, in a new section after the measurement plan:
 
@@ -1416,7 +1438,7 @@ Java source, and the build script each refuse a payload that does not match.
 Replace `NN,NNN` and `<hash>` with the real values from
 `wc -c` and `sha1sum`, formatted with a thousands separator to match the test.
 
-- [ ] **Step 5: Link it from the repository README**
+- [x] **Step 5: Link it from the repository README**
 
 Add to the documentation list in `README.md`:
 
@@ -1428,12 +1450,12 @@ Add a status bullet to the confirmed-results list stating that the dark frame
 series app and analysis tool are built and host-tested, and that the series has
 not yet run on a camera.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: `python -m pytest -v`
 Expected: all tests PASS, including `test_relative_markdown_links_resolve`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add README.md docs/dark-frame-series.md android/dark-frame-series/README.md tests/test_dark_frame_series_payload.py
@@ -1456,7 +1478,7 @@ repository that reads RAW10 pixels and the only one that needs NumPy.
 - Consumes: `inspect_lri` and the module decoding from `tools/verify_stock_capture.py`.
 - Produces: `unpack_raw10(data: bytes, width: int, height: int, row_stride: int) -> numpy.ndarray` returning a `(height, width)` array of `uint16`; `surface_statistics(samples) -> SurfaceStats`; `analyze_series(directory: Path) -> SeriesReport`; and a CLI writing a text report to stdout.
 
-- [ ] **Step 1: Determine where the pixel bytes live**
+- [x] **Step 1: Determine where the pixel bytes live**
 
 The container format is already decoded in `tools/verify_stock_capture.py`:
 `LRI_HEADER = struct.Struct("<4sQQIB7x")` gives magic `LELR`, `block_length`,
@@ -1490,7 +1512,7 @@ Record which `message_type` carries the surfaces and where the pixel bytes start
 relative to the block. Write that finding as a comment at the top of the new
 tool. Do not guess it.
 
-- [ ] **Step 2: Write the failing unpacker test**
+- [x] **Step 2: Write the failing unpacker test**
 
 Create `tests/test_analyze_dark_frame_series.py`:
 
@@ -1556,14 +1578,14 @@ def test_surface_statistics_reports_mean_and_spatial_noise() -> None:
     assert stats.maximum == 1023
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_analyze_dark_frame_series.py -v`
 Expected: FAIL with an import error, or skip entirely if NumPy is absent.
 Install it first: `python -m pip install -r requirements-analysis.txt` after
 creating that file with the single line `numpy>=1.24`.
 
-- [ ] **Step 4: Write the unpacker and statistics**
+- [x] **Step 4: Write the unpacker and statistics**
 
 Create `tools/analyze_dark_frame_series.py`:
 
@@ -1644,12 +1666,12 @@ If Step 1 showed a different bit order in the fifth byte, correct the shift and
 say so in the docstring. The synthetic round-trip test passes either way, so it
 cannot catch a wrong order on its own; Step 6 validates against real data.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_analyze_dark_frame_series.py -v`
 Expected: 4 tests PASS.
 
-- [ ] **Step 6: Write the series reduction and CLI**
+- [x] **Step 6: Write the series reduction and CLI**
 
 Add to `tools/analyze_dark_frame_series.py`:
 
@@ -1673,7 +1695,7 @@ Add to `tools/analyze_dark_frame_series.py`:
 Memory stays bounded: reduce each surface to its statistics immediately after
 unpacking, and hold at most two surfaces for a read-noise pair.
 
-- [ ] **Step 7: Validate the unpacker against the retained real capture**
+- [x] **Step 7: Validate the unpacker against the retained real capture**
 
 Add this test, which skips when the local artifact is absent, matching the
 optional full-size test pattern already described in `docs/async-lri-writer.md`:
@@ -1703,7 +1725,7 @@ this is the check that actually constrains Step 4.
 Run: `python -m pytest tests/test_analyze_dark_frame_series.py -v`
 Expected: 5 PASS, or 4 PASS and 1 SKIP on a machine without the retained file.
 
-- [ ] **Step 8: Run the full suite and commit**
+- [x] **Step 8: Run the full suite and commit**
 
 Run: `python -m pytest -v`
 Expected: all tests PASS or SKIP.
