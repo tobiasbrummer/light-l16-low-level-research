@@ -435,3 +435,31 @@ def test_series_without_any_verified_capture_reports_failure() -> None:
     values = run_series({1: "settle"})
     assert values["final_status"] == "FAIL"
     assert values["final_reason"] == "series_produced_no_verified_capture"
+
+
+def test_docs_pin_the_current_child_payload() -> None:
+    import hashlib
+
+    doc = (ROOT / "docs" / "dark-frame-series.md").read_text(encoding="utf-8")
+    payload = CHILD.read_bytes()
+    assert f"{len(payload):,}-byte" in doc
+    assert hashlib.sha1(payload).hexdigest() in doc
+
+
+def test_repository_readme_links_the_dark_frame_series() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/dark-frame-series.md" in readme
+    assert "dark frame" in readme.lower()
+
+
+def test_app_readme_states_the_plan_and_the_unrun_status() -> None:
+    readme = (ROOT / "android" / "dark-frame-series" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert "24" in readme
+    assert "L16_LLD" in readme
+    for exposure in ("10 us", "1.25 ms", "5 ms", "20 ms"):
+        assert exposure in readme
+    for gain in ("2.0", "3.75", "4.0", "7.5"):
+        assert gain in readme
+    assert "has not" in readme.lower()

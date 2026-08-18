@@ -73,6 +73,17 @@ room temperature the dark current contribution stays far below the read noise,
 while 1.25 ms is a more conservative choice than the never-exercised 10 us
 point. Holding it fixed also keeps the plan fully compiled in and hash-pinned.
 
+## Payload identity
+
+The current 22,189-byte child payload has SHA-1 `cd3788ce22956b34ec69bb1466e81661b01241dd`. The supervisor, the
+Java source, and the build script each refuse a payload that does not match, so
+changing the plan requires deliberately updating every pin.
+
+The packaged async writer shim is the reviewed 8,904-byte object with SHA-1
+`150e53a736624010dc7fb741490ea8dca7afbfb8`, which is reproducible only with
+LLD 20.1.8. A different linker version produces a different byte count, and the
+build refuses it rather than shipping an unreviewed object.
+
 ## Departures from the existing capture apps
 
 Three properties of the existing one-shot apps do not carry over.
@@ -139,11 +150,25 @@ Free space on `/data` must be at least 8 GiB. `/sdcard` is a FUSE mount over
 the 6.3 GB of expected output plus working headroom.
 
 A darkness check confirms the lens is actually covered before the series
-starts. It reuses the Camera2 metering already implemented in
-`android/hdr-meter-probe`: open a preview, let AE converge, and require the
-converged result to remain dark at the sensor's maximum sensitivity. Camera2
-is closed before the root trigger, as in `adaptive-a-group-capture`. This
-check covers only the module Camera2 exposes, not all 16, so it catches a
+starts. It reuses the Camera2 pipeline from `android/hdr-meter-probe` but not
+its metering: auto-exposure is switched off rather than allowed to converge,
+because AE would adapt to a dark scene and hide the very light leak the check
+exists to find. Instead the check forces the worst case, setting the highest
+sensitivity the device reports and a 100 ms integration. If the scene is still
+dark under maximum amplification, the lens is covered.
+
+It samples eight frames and evaluates both the mean luma and the 99.9th
+percentile, since a mean alone would average away a leak confined to one edge.
+The two thresholds are starting values on the 8-bit luma scale, not calibrated
+constants, and the measured values are reported next to them so the first run
+shows how much margin the cover actually has.
+
+Camera2 is released in a `finally` block before the result is reported, and the
+app refuses to arm the root runner unless its camera handles are null. The
+child re-checks the same condition through `dumpsys media.camera` before it
+runs `lcc`, so both sides verify it.
+
+This check covers only the module Camera2 exposes, not all 16, so it catches a
 forgotten cover rather than proving every module is dark. It is worth its
 complexity because it prevents a 25-minute run from producing 6.3 GB of
 unusable frames.
