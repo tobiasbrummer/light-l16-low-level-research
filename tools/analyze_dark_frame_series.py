@@ -22,14 +22,15 @@ Container layout, established by walking a retained all-16 capture:
 The offset is read from field 5 rather than computed from the stride, because
 the padding between surfaces is not derivable from the image geometry.
 
-RAW10 bit order: this follows the MIPI CSI-2 packing, four pixels per five
-bytes with the low bits of pixels 0..3 in bits [1:0], [3:2], [5:4], [7:6] of
-the fifth byte.  That assignment could not be confirmed empirically from the
-retained capture: the alternative ordering differs by at most 3 DN and is
-invisible in a high-contrast scene.  It does not affect any statistic reported
-here, since the two low bits are equally distributed across the four quad
-positions; it would only change which individual pixel a hot-pixel coordinate
-names.  A dark frame with a genuinely flat field would settle it.
+Pixel packing: the five-byte group is a continuous little-endian bitstream,
+LSB first -- pixel 0 in bits 0-9, pixel 1 in bits 10-19, and so on.  It is NOT
+the byte-aligned MIPI CSI-2 packing of four high bytes plus a byte of low bits,
+which this tool assumed until a covered-lens dark frame disproved it.  Against
+a flat field the bitstream reading gives 42 DN with 0.70 DN of noise and no
+difference between the four positions in a group, while the byte-aligned
+reading gave four systematically different levels spanning 505 DN.  A normal
+photograph hides the difference because image content varies anyway, so only
+the dark frame could settle it.
 """
 
 from __future__ import annotations
@@ -87,7 +88,19 @@ class CellKey:
 def unpack_raw10(
     data: bytes, width: int, height: int, row_stride: int
 ) -> "numpy.ndarray":
-    """Unpack MIPI RAW10 into a (height, width) array of uint16."""
+    """Unpack the LRI 10-bit surface into a (height, width) array of uint16.
+
+    The format is a continuous little-endian bitstream, LSB first: pixel 0
+    occupies bits 0-9 of the five-byte group, pixel 1 bits 10-19, and so on.
+    It is NOT the byte-aligned MIPI packing where four high bytes are followed
+    by a byte of low bits.
+
+    Established against a covered-lens dark frame: this reading yields a flat
+    field at 42 DN with 0.70 DN of noise and no difference between the four
+    positions in a group, while the byte-aligned reading produced four
+    systematically different levels spanning 505 DN.  Ordinary photographs do
+    not reveal the difference, because image content masks it.
+    """
     if width % 4:
         raise ValueError(f"width {width} is not a multiple of four")
     packed_row_bytes = width // 4 * 5
@@ -100,14 +113,13 @@ def unpack_raw10(
         raise ValueError(f"need {needed} bytes, got {len(data)}")
     raw = numpy.frombuffer(data, dtype=numpy.uint8, count=needed)
     quads = raw.reshape(height, row_stride)[:, :packed_row_bytes]
-    quads = quads.reshape(height, width // 4, 5)
-    high = quads[:, :, :4].astype(numpy.uint16)
-    low = quads[:, :, 4].astype(numpy.uint16)
+    quads = quads.reshape(height, width // 4, 5).astype(numpy.uint16)
+    b0, b1, b2, b3, b4 = (quads[:, :, i] for i in range(5))
     out = numpy.empty((height, width // 4, 4), dtype=numpy.uint16)
-    for position in range(4):
-        out[:, :, position] = (
-            (high[:, :, position] << 2) | ((low >> (2 * position)) & 0x03)
-        )
+    out[:, :, 0] = b0 | ((b1 & 0x03) << 8)
+    out[:, :, 1] = (b1 >> 2) | ((b2 & 0x0F) << 6)
+    out[:, :, 2] = (b2 >> 4) | ((b3 & 0x3F) << 4)
+    out[:, :, 3] = (b3 >> 6) | (b4 << 2)
     return out.reshape(height, width)
 
 
@@ -296,22 +308,45 @@ def analyze_series(directory: Path, hot_threshold: int) -> str:
 
     lines.append("## Dark current at gain 1.0")
     lines.append("")
-    lines.append(f"{'module':<7} {'slope_dn_per_s':>16} {'points':>7}")
+    lines.append(
+        f"{'module':<7} {'slope_dn_per_s':>16} {'cell_scatter_dn':>17} {'points':>7}"
+    )
     gain_one = {
         key: members for key, members in cells.items() if abs(key.gain - 1.0) < 1e-6
     }
     modules = sorted(per_file[files[0]])
     for name in modules:
-        points = [
-            (key.exposure_ns / 1e9, per_file[members[0]][name].mean)
-            for key, members in sorted(gain_one.items(), key=lambda kv: kv[0].exposure_ns)
-            if name in per_file[members[0]]
-        ]
+        # Average the repeats of each cell.  Using only the first frame lets
+        # per-frame drift masquerade as a slope: on the first physical series
+        # that produced 2.824 DN/s for A1 where the cell means give 0.073.
+        points = []
+        for key, members in sorted(
+            gain_one.items(), key=lambda kv: kv[0].exposure_ns
+        ):
+            levels = [
+                per_file[m][name].mean for m in members if name in per_file[m]
+            ]
+            if levels:
+                points.append(
+                    (key.exposure_ns / 1e9, sum(levels) / len(levels))
+                )
+        scatters = []
+        for _key, members in gain_one.items():
+            levels = [
+                per_file[m][name].mean for m in members if name in per_file[m]
+            ]
+            if len(levels) >= 2:
+                mean = sum(levels) / len(levels)
+                var = sum((v - mean) ** 2 for v in levels) / (len(levels) - 1)
+                scatters.append(var ** 0.5)
+        scatter = sum(scatters) / len(scatters) if scatters else float("nan")
         if len(points) < 2:
-            lines.append(f"{name:<7} {'n/a':>16} {len(points):>7}")
+            lines.append(f"{name:<7} {'n/a':>16} {scatter:>17.4f} {len(points):>7}")
             continue
         slope = _least_squares_slope(points)
-        lines.append(f"{name:<7} {slope:>16.3f} {len(points):>7}")
+        lines.append(
+            f"{name:<7} {slope:>16.3f} {scatter:>17.4f} {len(points):>7}"
+        )
     lines.append("")
 
     lines.append("## Requested versus recorded gain")

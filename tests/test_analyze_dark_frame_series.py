@@ -25,16 +25,20 @@ RETAINED = (
 
 
 def pack_raw10(values: list[int]) -> bytes:
-    """Reference packer: four pixels per five bytes, low bits ascending."""
+    """Reference packer: continuous little-endian 10-bit bitstream, LSB first.
+
+    Established against a covered-lens dark frame; the byte-aligned MIPI
+    packing this test originally assumed produced four systematically
+    different levels across the positions of a group.
+    """
     assert len(values) % 4 == 0
     out = bytearray()
     for index in range(0, len(values), 4):
-        quad = values[index:index + 4]
-        low = 0
-        for position, sample in enumerate(quad):
-            out.append((sample >> 2) & 0xFF)
-            low |= (sample & 0x03) << (2 * position)
-        out.append(low)
+        packed = 0
+        for position, sample in enumerate(values[index:index + 4]):
+            assert 0 <= sample <= 1023
+            packed |= sample << (10 * position)
+        out.extend(packed.to_bytes(5, "little"))
     return bytes(out)
 
 
@@ -107,6 +111,27 @@ def test_cells_group_by_exposure_and_gain() -> None:
 
 
 @pytest.mark.skipif(not RETAINED.exists(), reason="retained all-16 LRI not present")
+def test_dark_frame_decodes_as_a_flat_field() -> None:
+    """The decisive check on the packing: a covered lens must read flat.
+
+    A wrong grouping still yields values inside the 10-bit range, so range
+    checks cannot catch it.  What it cannot fake is a uniform field: the four
+    positions within a five-byte group must agree.
+    """
+    from analyze_dark_frame_series import iter_module_surfaces
+
+    frame = Path("/media/archive/light-l16-dark-frames-20260818") / (
+        "RDI_20260818_213326_497.lri"
+    )
+    if not frame.exists():
+        pytest.skip("dark frame not present")
+    for record, samples in iter_module_surfaces(frame):
+        positions = [samples[:, i::4].mean() for i in range(4)]
+        assert max(positions) - min(positions) < 2.0, record.name
+        assert 20 < samples.mean() < 80, record.name
+        break
+
+
 def test_real_capture_decodes_into_sixteen_named_surfaces() -> None:
     from analyze_dark_frame_series import iter_module_surfaces
 
