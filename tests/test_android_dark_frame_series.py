@@ -189,3 +189,75 @@ def test_main_activity_requests_the_camera_permission_at_runtime() -> None:
     source = SOURCE.read_text()
     assert "checkSelfPermission(Manifest.permission.CAMERA)" in source
     assert "onRequestPermissionsResult" in source
+
+
+BUILD = APP / "build_debug_apk.sh"
+EXPECTED_ASYNC_SHIM_SIZE = 8904
+EXPECTED_ASYNC_SHIM_SHA1 = "150e53a736624010dc7fb741490ea8dca7afbfb8"
+EXPECTED_ASYNC_SHIM_SHA256 = (
+    "bbc6865374dfd7beb72d4a1cc30fad81414c6915052eb22e35c5205574ae9cb5"
+)
+
+
+def test_build_packages_only_the_three_reviewed_payloads() -> None:
+    build = BUILD.read_text()
+    assert (
+        'SUPERVISOR="$PROJECT_ROOT/device/dark_frame_series_hostless_supervisor.sh"'
+        in build
+    )
+    assert 'CHILD="$PROJECT_ROOT/device/dark_frame_series_once.sh"' in build
+    assert (
+        'ASYNC_SHIM_BUILDER="$PROJECT_ROOT/host/build_lcc_async_shim.sh"' in build
+    )
+    assert 'sh -n "$FILE"' in build
+    assert "apksigner" in build
+
+
+def test_build_refuses_changed_payloads() -> None:
+    build = BUILD.read_text()
+    assert f"EXPECTED_SUPERVISOR_SIZE={SUPERVISOR.stat().st_size}" in build
+    assert f"EXPECTED_SUPERVISOR_SHA256={digest(SUPERVISOR, 'sha256')}" in build
+    assert f"EXPECTED_CHILD_SIZE={CHILD.stat().st_size}" in build
+    assert f"EXPECTED_CHILD_SHA256={digest(CHILD, 'sha256')}" in build
+    assert f"EXPECTED_ASYNC_SHIM_SIZE={EXPECTED_ASYNC_SHIM_SIZE}" in build
+    assert f"EXPECTED_ASYNC_SHIM_SHA256={EXPECTED_ASYNC_SHIM_SHA256}" in build
+    assert "refusing changed payload" in build
+    assert "refusing unexpected generated async shim" in build
+
+
+def test_build_compiles_both_java_sources() -> None:
+    build = BUILD.read_text()
+    assert "MainActivity.java" in build
+    assert "DarknessCheck.java" in build
+
+
+def test_build_prefers_the_reviewed_lld_over_an_unrelated_one() -> None:
+    """The reviewed shim identity comes from LLD 20.1.8.
+
+    A different LLD produces a different byte count, so the build must look for
+    the versioned Ubuntu paths before falling back to whatever toolchain
+    happens to ship one.
+    """
+    build = BUILD.read_text()
+    assert "/usr/lib/llvm-20/bin/ld.lld" in build
+    assert "ld.lld-20" in build
+    assert build.index("llvm-20") < build.index("rustup")
+
+
+def test_all_three_layers_pin_the_same_values() -> None:
+    build = BUILD.read_text()
+    source = SOURCE.read_text()
+    supervisor = SUPERVISOR.read_text()
+    child_size = CHILD.stat().st_size
+    child_sha1 = digest(CHILD, "sha1")
+    child_sha256 = digest(CHILD, "sha256")
+
+    assert f"EXPECTED_CHILD_SIZE={child_size}" in build
+    assert f"EXPECTED_CHILD_SIZE = {child_size}L" in source
+    assert f"EXPECTED_CHILD_SIZE={child_size}" in supervisor
+    assert child_sha256 in build
+    assert child_sha256 in source
+    assert f"EXPECTED_CHILD_SHA1={child_sha1}" in supervisor
+    assert f"EXPECTED_ASYNC_SHIM_SHA1={EXPECTED_ASYNC_SHIM_SHA1}" in supervisor
+    assert EXPECTED_ASYNC_SHIM_SHA256 in build
+    assert EXPECTED_ASYNC_SHIM_SHA256 in source
