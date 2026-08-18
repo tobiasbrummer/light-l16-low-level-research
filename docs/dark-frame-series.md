@@ -240,6 +240,38 @@ the metadata and states that it never interprets the RAW10 pixels. Dark frame
 statistics need the pixels, so the tool adds a RAW10 unpacker: four pixels per
 five bytes, 5200 bytes per row, 4160 x 3120 per surface.
 
+### Where the pixels sit
+
+Walking a retained all-16 capture established the layout. The pixel surfaces
+sit *before* the protobuf message inside a `message_type == 0` block, between
+the 32-byte block header and `message_offset`. Each module record carries a
+surface submessage whose **field 5 is the surface's byte offset relative to the
+start of its block**. `verify_stock_capture.py` does not read that field, which
+is the one piece the analysis tool had to add.
+
+The retained 259,999,993-byte capture distributes its 16 surfaces over three
+blocks as 6, 6, and 4. Consecutive surface offsets differ by 16,228,352 bytes
+while only 16,224,000 of those are pixels, so the surfaces are padded to an
+alignment boundary. The tool reads the recorded offset instead of deriving it,
+because that padding does not follow from the image geometry.
+
+### The RAW10 bit order is assumed, not measured
+
+The unpacker follows the MIPI CSI-2 packing: the low bits of pixels 0 to 3
+occupy bits [1:0], [3:2], [5:4], and [7:6] of the fifth byte. That assignment
+could not be confirmed from the retained capture. The alternative ordering
+differs by at most 3 DN, and in a high-contrast scene the two low bits vanish
+into the image content: the mean absolute difference between neighbouring
+same-colour pixels is about 498 DN, so a same-colour-difference variance test
+separates the two hypotheses by less than one part in twenty thousand.
+
+This does not affect any statistic the tool reports. The two low bits are
+equally distributed across the four quad positions, so mean level, fixed
+pattern noise, read noise, and dark current are unchanged by the choice. It
+would only change which individual pixel a hot-pixel coordinate names. A dark
+frame over a genuinely flat field is what would settle it, which is one more
+thing the first physical series can answer.
+
 ### Dependency boundary
 
 A full series is 24 files of about 260 MB, or roughly 5 billion samples. That
