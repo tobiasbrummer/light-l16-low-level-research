@@ -181,3 +181,257 @@ def test_validator_rejects_a_non_numeric_exposure() -> None:
     result = run_validator(f"CAPTURE_PLAN='{plan}'")
     assert result.returncode == 1
     assert "failure=invalid_plan_exposure_value" in result.stdout
+
+
+def test_settle_gate_runs_between_captures_not_a_reboot() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    assert "settle_after_capture" in text
+    assert "force_manual_zero" in text
+    assert "lcc_process_survived_capture" in text
+    assert "camera_client_after_capture_or_state_unknown" in text
+    assert "media_stopped_after_capture" in text
+    assert "lightsvr_stopped_after_capture" in text
+    # The child must never reboot; only the supervisor does, once, at the end.
+    assert "/system/bin/reboot" not in text
+    assert "sys.powerctl" not in text
+
+
+def test_each_capture_requires_exactly_one_new_lri() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    assert "capture_lri_count_not_one" in text
+    assert "valid_generated_lri_path" in text
+    assert "capture_lri_path_invalid" in text
+
+
+def test_partial_series_is_reported_separately_from_failure() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    assert "FINAL_STATUS=PARTIAL" in text
+    assert "series_aborted_after_completed_captures" in text
+    assert "series_produced_no_verified_capture" in text
+    assert "SERIES_ABORTED_AT=" in text
+
+
+def test_a_dirty_cleanup_downgrades_a_partial_series_to_failure() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    assert "post_series_cleanup_failed" in text
+    assert text.index("CLEANUP_OK=yes") < text.index("post_series_cleanup_failed")
+
+
+def test_every_capture_is_bounded_and_uses_the_async_shim() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    assert '/system/bin/timeout -k 5s "${CAPTURE_TIMEOUT_SECONDS}s"' in text
+    assert "'LD_PRELOAD=$1; export LD_PRELOAD; shift; exec \"$@\"'" in text
+    assert "l16-dark-frame-launch" in text
+    assert '"$WORKDIR/lcc.$CAPTURE_INDEX.txt"' in text
+
+
+def test_lcc_argv_is_built_per_capture_with_one_exposure_and_one_gain() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    assert 'set -- -m 0 -s 0 -f 1 "$MASK0" "$MASK1" "$MASK2" \\' in text
+    assert '-R 4160,3120 -e "$CAPTURE_EXPOSURE" -g "$CAPTURE_GAIN"' in text
+    # One -e value per capture, never the 16-value HDR form.
+    assert "EXPOSURE_ARGS" not in text
+
+
+def test_capture_attempt_forces_a_reboot_request() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    armed = '[ "$ARMED" = "$ARM_VALUE" ]'
+    assert text.index(armed) < text.index("CAPTURE_ATTEMPTED=yes")
+    assert text.index("CAPTURE_ATTEMPTED=yes") < text.index('"$LCC_COPY" "$@"')
+    assert "NORMAL_REBOOT_REQUIRED=yes" in text
+
+
+def test_preflight_verifies_every_binary_it_copies() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    for reason in (
+        "unexpected_lcc_hash",
+        "copied_lcc_hash_mismatch",
+        "unexpected_async_shim_hash",
+        "copied_async_shim_hash_mismatch",
+        "unexpected_camera_hal_hash",
+        "unexpected_build",
+        "unexpected_kernel",
+        "unexpected_asic_firmware",
+        "manual_control_not_zero",
+        "lcc_already_running",
+        "insufficient_data_free_space",
+    ):
+        assert reason in text
+
+
+def extract_series(stub_results: dict[int, str]) -> str:
+    """Build a runnable fragment of the capture loop with a stubbed camera.
+
+    The loop's own control flow -- when it breaks, what it counts, and which
+    final status it reports -- is the part most likely to hold an off-by-one.
+    String assertions cannot reach it, so the harness replaces only the three
+    lines that invoke lcc with a scripted exit status and stubs the two gate
+    functions.  Everything else, including the counting and the status
+    selection, is the real code.
+    """
+    text = CHILD.read_text(encoding="utf-8")
+    start = text.index("CAPTURE_INDEX=0\n")
+    end = text.index("exit 0\n", start) + len("exit 0\n")
+    loop = text[start:end]
+
+    invocation_start = loop.index("    (\n        cd \"$WORKDIR\"")
+    invocation_end = loop.index("CAPTURE_LCC_STATUS=$?\n") + len(
+        "CAPTURE_LCC_STATUS=$?\n"
+    )
+    loop = (
+        loop[:invocation_start]
+        + '    CAPTURE_LCC_STATUS=$(lcc_status_stub "$CAPTURE_INDEX")\n'
+        + loop[invocation_end:]
+    )
+
+    def stub_for(kind: str) -> str:
+        return "\n".join(
+            f'        {index}) if [ "{kind}" = "{outcome}" ]; then '
+            f'abort_series "$1" stub_{kind}_failure; return 1; fi ;;'
+            for index, outcome in stub_results.items()
+        )
+
+    lcc_cases = "\n".join(
+        f"        {index}) printf '1\\n'; return 0 ;;"
+        for index, outcome in stub_results.items()
+        if outcome == "lcc"
+    )
+    harness = f'''
+CAPTURE_PLAN='{" ".join("10000:1.0" for _ in range(24))}'
+CAPTURES_REQUESTED=24
+CAPTURES_COMPLETED=0
+CAPTURE_ATTEMPTED=no
+NORMAL_REBOOT_REQUIRED=no
+SERIES_ABORTED_AT=none
+SERIES_ABORT_REASON=none
+FINAL_STATUS=FAIL
+FINAL_REASON=harness_did_not_finish
+SELECTION_DESCRIPTION=harness
+TUPLE0=11
+TUPLE1=F1
+TUPLE2=00
+CAPTURE_TIMEOUT_SECONDS=60
+LRI_DIR=/harness
+WORKDIR=$(mktemp -d)
+MANIFEST=""
+ASYNC_SHIM_STATUS=disabled
+
+# The loop ends in `exit 0`; finish() is not part of the extracted fragment,
+# so an EXIT trap is what surfaces the selected final status.
+trap 'printf "final_status=%s\\nfinal_reason=%s\\n" "$FINAL_STATUS" "$FINAL_REASON"' EXIT
+
+fail() {{
+    printf 'failure=%s\\n' "$1"
+    exit 1
+}}
+
+abort_series() {{
+    SERIES_ABORTED_AT=$1
+    SERIES_ABORT_REASON=$2
+    printf 'series_aborted_at=%s\\n' "$SERIES_ABORTED_AT"
+    printf 'series_abort_reason=%s\\n' "$SERIES_ABORT_REASON"
+}}
+
+snapshot_lri_paths() {{
+    : > "$1"
+}}
+
+lcc_status_stub() {{
+    case "$1" in
+{lcc_cases}
+    esac
+    printf '0\\n'
+    return 0
+}}
+
+settle_after_capture() {{
+    case "$1" in
+{stub_for("settle")}
+    esac
+    printf 'capture_%s_settled=yes\\n' "$1"
+    return 0
+}}
+
+record_capture_lri() {{
+    case "$1" in
+{stub_for("record")}
+    esac
+    printf 'capture_%s_lri_recorded=yes\\n' "$1"
+    return 0
+}}
+'''
+    return harness + "\n" + loop
+
+
+def run_series(stub_results: dict[int, str] | None = None) -> dict[str, str]:
+    shell = shutil.which("sh")
+    assert shell is not None
+    result = subprocess.run(
+        [shell, "-c", extract_series(stub_results or {})],
+        capture_output=True,
+        text=True,
+    )
+    values: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            values[key] = value
+    return values
+
+
+def test_series_completes_all_twenty_four_captures() -> None:
+    values = run_series()
+    assert values["captures_completed"] == "24"
+    assert values["capture_24"] == "ok"
+    assert "capture_25_exposure_ns" not in values
+
+
+def test_series_stops_at_a_failed_settle_gate_and_reports_partial() -> None:
+    values = run_series({5: "settle"})
+    assert values["captures_completed"] == "4"
+    assert values["series_aborted_at"] == "5"
+    assert values["series_abort_reason"] == "stub_settle_failure"
+    assert "capture_6_exposure_ns" not in values
+
+
+def test_series_failing_on_the_first_capture_completes_nothing() -> None:
+    values = run_series({1: "settle"})
+    assert values["captures_completed"] == "0"
+    assert values["series_aborted_at"] == "1"
+
+
+def test_series_stops_on_a_nonzero_lcc_status() -> None:
+    values = run_series({10: "lcc"})
+    assert values["captures_completed"] == "9"
+    assert values["series_aborted_at"] == "10"
+    assert values["series_abort_reason"] == "capture_lcc_nonzero_or_timeout"
+
+
+def test_series_stops_when_a_capture_produces_no_attributable_lri() -> None:
+    values = run_series({3: "record"})
+    assert values["captures_completed"] == "2"
+    assert values["series_aborted_at"] == "3"
+
+
+def test_first_capture_marks_the_run_as_camera_touched() -> None:
+    values = run_series({1: "settle"})
+    assert values["capture_1_exposure_ns"] == "10000"
+
+
+def test_complete_series_reports_pass() -> None:
+    values = run_series()
+    assert values["final_status"] == "PASS"
+    assert values["final_reason"].startswith("full_dark_frame_series_completed")
+
+
+def test_aborted_series_with_frames_reports_partial_not_failure() -> None:
+    values = run_series({20: "settle"})
+    assert values["final_status"] == "PARTIAL"
+    assert values["final_reason"] == "series_aborted_after_completed_captures"
+    assert values["captures_completed"] == "19"
+
+
+def test_series_without_any_verified_capture_reports_failure() -> None:
+    values = run_series({1: "settle"})
+    assert values["final_status"] == "FAIL"
+    assert values["final_reason"] == "series_produced_no_verified_capture"
