@@ -17,6 +17,7 @@ CONFIRM_TIMEOUT_PROBE=--execute-timeout-shim-all16-8s-once-and-reboot
 CONFIRM_TIMEOUT_PROBE_6S=--execute-timeout-shim-all16-6s-once-and-reboot
 CONFIRM_MMAP_PROBE_6S=--execute-mmap-probe-all16-6s-once-and-reboot
 CONFIRM_BARE_6S=--execute-bare-all16-6s-once-and-reboot
+CONFIRM_TIMEOUT_PROBE_29S=--execute-timeout-shim-all16-29s-once-and-reboot
 EXPECTED_SHIM_SIZE=9080
 EXPECTED_SHIM_SHA1=0b93dc17a2c4219943293d96b7edda39be61613d
 EXPECTED_TIMEOUT_SHIM_SIZE=10084
@@ -225,14 +226,33 @@ elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_BARE_6S" ]; then
     EXPECTED_EXPOSURE_COUNT=1
     EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
     EXPECTED_EXPOSURE_PLAN=selected:6000000000
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_TIMEOUT_PROBE_29S" ]; then
+    PROFILE=timeout-probe-all16-29s
+    PROFILE_LABEL=TIMEOUT-PROBE-ALL16-29S
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_timeout_probe_29s_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_timeout_probe_29s.result
+    REMOTE_ARM=/data/local/tmp/light_l16_timeout_probe_29s.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_timeout_probe_29s_run
+    REMOTE_SHIM=/data/local/tmp/liblcc_async_writer_shim.so
+    REMOTE_TIMEOUT_SHIM=/data/local/tmp/liblcc_async_timeout_shim.so
+    ARM_VALUE=TIMEOUT_PROBE_ALL16_29000000000NS_GAIN_1.0_ONCE
+    EXPECTED_MODE=TIMEOUT_PROBE_ALL16_29S_ONCE
+    OUTPUT_PREFIX=timeout-probe-all16-29s
+    POLL_LIMIT=300
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=no
+    TIMEOUT_SHIM_REQUIRED=yes
+    EXPECTED_EXPOSURE_COUNT=1
+    EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
+    EXPECTED_EXPOSURE_PLAN=selected:29000000000
 else
-    printf 'usage: %s {%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s}\n' \
+    printf 'usage: %s {%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s}\n' \
         "$0" "$CONFIRM_A1" "$CONFIRM_A1_CENTER_AF" \
         "$CONFIRM_A1_INLINE_AF" "$CONFIRM_A_GROUP_INLINE_AF" \
         "$CONFIRM_A1_ASYNC" "$CONFIRM_ALL16" "$CONFIRM_ALL16_ASYNC" \
         "$CONFIRM_ALL16_HDR_ASYNC" "$CONFIRM_TIMEOUT_PROBE" \
         "$CONFIRM_TIMEOUT_PROBE_6S" "$CONFIRM_MMAP_PROBE_6S" \
-        "$CONFIRM_BARE_6S" >&2
+        "$CONFIRM_BARE_6S" "$CONFIRM_TIMEOUT_PROBE_29S" >&2
     printf 'Profiles perform one real lcc capture request. HDR uses fixed 1.25/5/20 ms module roles; AF, shim, and ALL16 profiles always reboot.\n' >&2
     exit 2
 fi

@@ -89,7 +89,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     # The count is spelled out so adding a profile forces the doc to be read,
     # not just the byte size bumped.
     assert (
-        f"current {len(payload.read_bytes()):,}-byte twelve-profile payload"
+        f"current {len(payload.read_bytes()):,}-byte thirteen-profile payload"
         in control_doc
     )
     assert hashlib.sha1(payload.read_bytes()).hexdigest() in control_doc
@@ -112,6 +112,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "/data/local/tmp/light_l16_timeout_probe_6s_once.sh" in text
     assert "/data/local/tmp/light_l16_mmap_probe_6s_once.sh" in text
     assert "/data/local/tmp/light_l16_bare_6s_once.sh" in text
+    assert "/data/local/tmp/light_l16_timeout_probe_29s_once.sh" in text
 
     def profile_block(path: str) -> str:
         start = text.index(f"    {path})")
@@ -151,6 +152,9 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     )
     bare_6s_profile = profile_block(
         "/data/local/tmp/light_l16_bare_6s_once.sh"
+    )
+    timeout_probe_29s_profile = profile_block(
+        "/data/local/tmp/light_l16_timeout_probe_29s_once.sh"
     )
     for profile in (a1_profile, a1_center_af_profile, a1_async_profile):
         assert "MASK0=02\n        MASK1=00\n        MASK2=00" in profile
@@ -211,6 +215,12 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "EXPOSURE_PLAN=selected:6000000000" in mmap_probe_6s_profile
     assert "USE_TIMEOUT_SHIM=yes" in mmap_probe_6s_profile
     assert "ALLOW_CLEAN_NO_REBOOT=no" in mmap_probe_6s_profile
+    # 29 s is the firmware's stated ceiling and the first exposure past the
+    # flat part of the HAL formula, where it derives T+5 instead of 15.
+    assert "EXPOSURE_ARGS=29000000000" in timeout_probe_29s_profile
+    assert "EXPOSURE_PLAN=selected:29000000000" in timeout_probe_29s_profile
+    assert "USE_TIMEOUT_SHIM=yes" in timeout_probe_29s_profile
+    assert "CAPTURE_TIMEOUT_SECONDS=180" in timeout_probe_29s_profile
     # The control profile must load nothing: the point is to see the capture
     # without our own instrumentation in the path.
     assert "USE_ASYNC_SHIM=no" in bare_6s_profile
@@ -282,7 +292,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "CAPTURE_TIMEOUT_SECONDS=60" in text
     assert "MIN_DATA_FREE_KB=262144" in text
     assert "MIN_DATA_FREE_KB=1048576" in text
-    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 12
+    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 13
     assert "DIAGNOSTIC_LOG_LINES=500" not in text
     assert "ALLOW_CLEAN_NO_REBOOT=yes" in text
     assert "ALLOW_CLEAN_NO_REBOOT=no" in text

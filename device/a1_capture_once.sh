@@ -243,6 +243,32 @@ case "$0" in
         EXPOSURE_ORDER=common_for_selected_modules
         EXPOSURE_PLAN=selected:6000000000
         ;;
+    /data/local/tmp/light_l16_timeout_probe_29s_once.sh)
+        OUT=/data/local/tmp/light_l16_timeout_probe_29s.result
+        ARM_FILE=/data/local/tmp/light_l16_timeout_probe_29s.armed
+        ARM_VALUE=TIMEOUT_PROBE_ALL16_29000000000NS_GAIN_1.0_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_timeout_probe_29s_run
+        MODE=TIMEOUT_PROBE_ALL16_29S_ONCE
+        MASK0=FE
+        MASK1=FF
+        MASK2=01
+        SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3 async_shim=required timeout_shim=required probe=29s'
+        # The longest exposure the firmware admits, and the first that leaves
+        # the flat part of the HAL formula: thread_time_out is 30 here, so the
+        # HAL derives T+5 rather than the constant 15 it uses at or below 9.
+        # That branch has never run.  29 s of integration plus about 14 s of
+        # readout is why the outer bound is 180 s.
+        CAPTURE_TIMEOUT_SECONDS=180
+        MIN_DATA_FREE_KB=1048576
+        DIAGNOSTIC_LOG_LINES=2000
+        ALLOW_CLEAN_NO_REBOOT=no
+        USE_ASYNC_SHIM=no
+        USE_TIMEOUT_SHIM=yes
+        EXPOSURE_COUNT=1
+        EXPOSURE_ARGS=29000000000
+        EXPOSURE_ORDER=common_for_selected_modules
+        EXPOSURE_PLAN=selected:29000000000
+        ;;
     /data/local/tmp/light_l16_all16_hdr_async_capture_once.sh)
         OUT=/data/local/tmp/light_l16_all16_hdr_async_capture.result
         ARM_FILE=/data/local/tmp/light_l16_all16_hdr_async_capture.armed

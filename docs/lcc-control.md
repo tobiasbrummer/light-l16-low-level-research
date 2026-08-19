@@ -755,10 +755,10 @@ to the fixed `A1-A5` mask as the next still-unverified multi-module step.
 
 ## Device-side wrapper syntax
 
-The current 55,993-byte twelve-profile payload has host SHA-1:
+The current 57,260-byte thirteen-profile payload has host SHA-1:
 
 ```text
-436ce97b6c1caf3fc5b7fbec8ff60eabf8802c33
+ad8c78eed6dbd188682dd8cf273beb31e86abc12
 ```
 
 Its host shell syntax check and automated tests pass. The ninth and tenth
@@ -792,7 +792,9 @@ no lens timeout. Its matching supervisor TXT also verifies the expected payload
 and shim hashes, focused-lock result, zero LCC exit, complete cleanup, settled
 services and camera clients, identical LRI size/SHA-1, and intended normal
 reboot. The seventh profile's exact per-module HDR exposure
-assignment also remains unexecuted. The twelfth profile is the control for both: the same 6 s capture with no
+assignment also remains unexecuted. The thirteenth profile takes the same capture to 29 s, the firmware's
+stated ceiling and the first exposure where the HAL derives T+5 instead of
+its flat 15 s. The twelfth profile is the control for both: the same 6 s capture with no
 preload at all. The eleventh profile repeats the 6 s capture with the mmap-failure probe in
 the extra-preload slot instead of the timeout patch, to recover the errno the
 HAL omits. The preceding 50,264-byte ten-profile payload had SHA-1
@@ -1445,6 +1447,31 @@ callback from inside `closeCamera` and completes the teardown afterwards, as
 the HAL does, which separates the cases: an inline write lands before
 teardown, a worker after it. Disabling the fix makes that test fail, which is
 the only evidence that it tests anything.
+
+### 29 s, the firmware's ceiling
+
+The longest exposure the firmware admits now completes with all sixteen
+modules and the writer active:
+
+```text
+max_exposure_f: 29.000000, single_burst_delay: 29.000000, total_delay: 29.100000
+Thread time out: 30
+Thread Timeout: 35
+L16_ASYNC_SHIM write_after_close_inline
+Closed camera pipeline, 1
+lri_output_size=259999993
+```
+
+`Thread Timeout: 35` is the first observation of the HAL's other branch. Every
+earlier capture kept `thread_time_out` at or below 9, where the formula yields
+a constant 15; at 30 it yields `T + 5`. Both halves of
+`(T > 9) ? T + 5 : 15` are now confirmed on hardware rather than read off a
+disassembly.
+
+Decoding the frame gives sixteen module surfaces with real data. The means
+range from 44 to 372 DN, which is collected light rather than dark current --
+the camera was not covered. A dark measurement at this exposure still has to
+be taken under cover.
 
 Also established, independently of all this: the timeout field at instance
 offset `0x24` is real, the formula predicting it holds on hardware, and it can
