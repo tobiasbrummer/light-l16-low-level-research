@@ -89,7 +89,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     # The count is spelled out so adding a profile forces the doc to be read,
     # not just the byte size bumped.
     assert (
-        f"current {len(payload.read_bytes()):,}-byte ten-profile payload"
+        f"current {len(payload.read_bytes()):,}-byte twelve-profile payload"
         in control_doc
     )
     assert hashlib.sha1(payload.read_bytes()).hexdigest() in control_doc
@@ -110,6 +110,8 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "/data/local/tmp/light_l16_all16_hdr_async_capture_once.sh" in text
     assert "/data/local/tmp/light_l16_timeout_probe_once.sh" in text
     assert "/data/local/tmp/light_l16_timeout_probe_6s_once.sh" in text
+    assert "/data/local/tmp/light_l16_mmap_probe_6s_once.sh" in text
+    assert "/data/local/tmp/light_l16_bare_6s_once.sh" in text
 
     def profile_block(path: str) -> str:
         start = text.index(f"    {path})")
@@ -143,6 +145,12 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     )
     timeout_probe_6s_profile = profile_block(
         "/data/local/tmp/light_l16_timeout_probe_6s_once.sh"
+    )
+    mmap_probe_6s_profile = profile_block(
+        "/data/local/tmp/light_l16_mmap_probe_6s_once.sh"
+    )
+    bare_6s_profile = profile_block(
+        "/data/local/tmp/light_l16_bare_6s_once.sh"
     )
     for profile in (a1_profile, a1_center_af_profile, a1_async_profile):
         assert "MASK0=02\n        MASK1=00\n        MASK2=00" in profile
@@ -195,6 +203,25 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "EXPOSURE_ARGS=6000000000" in timeout_probe_6s_profile
     assert "EXPOSURE_PLAN=selected:6000000000" in timeout_probe_6s_profile
     # Distinct result, arm and work paths, so one probe cannot read the other.
+    # The mmap probe repeats the 6 s capture with the diagnostic preload in
+    # the extra-preload slot; the capture parameters must be identical or the
+    # two runs are not comparable.
+    assert "MASK0=FE\n        MASK1=FF\n        MASK2=01" in mmap_probe_6s_profile
+    assert "EXPOSURE_ARGS=6000000000" in mmap_probe_6s_profile
+    assert "EXPOSURE_PLAN=selected:6000000000" in mmap_probe_6s_profile
+    assert "USE_TIMEOUT_SHIM=yes" in mmap_probe_6s_profile
+    assert "ALLOW_CLEAN_NO_REBOOT=no" in mmap_probe_6s_profile
+    # The control profile must load nothing: the point is to see the capture
+    # without our own instrumentation in the path.
+    assert "USE_ASYNC_SHIM=no" in bare_6s_profile
+    assert "USE_TIMEOUT_SHIM=no" in bare_6s_profile
+    assert "EXPOSURE_ARGS=6000000000" in bare_6s_profile
+    assert "MASK0=FE\n        MASK1=FF\n        MASK2=01" in bare_6s_profile
+    for marker in ("light_l16_mmap_probe_6s.result",
+                   "light_l16_mmap_probe_6s.armed",
+                   "light_l16_mmap_probe_6s_run"):
+        assert marker in mmap_probe_6s_profile
+        assert marker not in timeout_probe_6s_profile
     for marker in ("light_l16_timeout_probe_6s.result",
                    "light_l16_timeout_probe_6s.armed",
                    "light_l16_timeout_probe_6s_run"):
@@ -255,7 +282,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "CAPTURE_TIMEOUT_SECONDS=60" in text
     assert "MIN_DATA_FREE_KB=262144" in text
     assert "MIN_DATA_FREE_KB=1048576" in text
-    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 10
+    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 12
     assert "DIAGNOSTIC_LOG_LINES=500" not in text
     assert "ALLOW_CLEAN_NO_REBOOT=yes" in text
     assert "ALLOW_CLEAN_NO_REBOOT=no" in text
@@ -1024,3 +1051,22 @@ def test_relative_markdown_links_resolve() -> None:
             if not target.exists():
                 missing.append(f"{document.relative_to(ROOT)} -> {match.group(1)}")
     assert missing == []
+
+
+def test_every_wrapper_profile_sets_the_variables_the_report_prints() -> None:
+    """A branch that omits one only fails after the capture has been taken.
+
+    The bare 6 s profile reached the report with PROFILE unset, aborting the
+    wrapper after a successful 260 MB capture.  Nothing was lost, but the run
+    was a physical capture and a reboot, so the check belongs here.
+    """
+    wrapper = (ROOT / "host" / "run_a1_capture_once.sh").read_text(encoding="utf-8")
+    head, _, _ = wrapper.partition("\nRUN_STAMP=")
+    branches = re.split(r'\n(?:el)?if \[ "\$#" -eq 1 \] && \[ "\$1" = ', head)[1:]
+    assert len(branches) >= 12
+    required = ("PROFILE=", "EXPECTED_MODE=", "OUTPUT_PREFIX=", "ARM_VALUE=",
+                "REMOTE_PAYLOAD=", "POLL_LIMIT=")
+    for branch in branches:
+        name = branch.split("\"", 1)[0]
+        for variable in required:
+            assert variable in branch, f"{name} does not set {variable}"

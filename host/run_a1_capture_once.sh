@@ -15,6 +15,8 @@ CONFIRM_ALL16_ASYNC=--execute-fixed-all16-async-shim-20ms-once-and-reboot
 CONFIRM_ALL16_HDR_ASYNC=--execute-fixed-all16-hdr-async-shim-1p25-5-20ms-once-and-reboot
 CONFIRM_TIMEOUT_PROBE=--execute-timeout-shim-all16-8s-once-and-reboot
 CONFIRM_TIMEOUT_PROBE_6S=--execute-timeout-shim-all16-6s-once-and-reboot
+CONFIRM_MMAP_PROBE_6S=--execute-mmap-probe-all16-6s-once-and-reboot
+CONFIRM_BARE_6S=--execute-bare-all16-6s-once-and-reboot
 EXPECTED_SHIM_SIZE=8904
 EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8
 EXPECTED_TIMEOUT_SHIM_SIZE=9904
@@ -145,8 +147,7 @@ elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_ALL16_HDR_ASYNC" ]; then
     EXPECTED_EXPOSURE_COUNT=16
     EXPECTED_EXPOSURE_ORDER=A1,A2,A3,A4,A5,B1,B2,B3,B4,B5,C1,C2,C3,C4,C5,C6
     EXPECTED_EXPOSURE_PLAN=A1:1250000,A2:20000000,A3:5000000,A4:5000000,A5:20000000,B1:20000000,B2:5000000,B3:5000000,B4:1250000,B5:20000000,C1:20000000,C2:5000000,C3:5000000,C4:20000000,C5:1250000,C6:20000000
-elif [ "${1-}" = "$CONFIRM_TIMEOUT_PROBE" ]; then
-    [ "$#" -eq 1 ] || exit 2
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_TIMEOUT_PROBE" ]; then
     REMOTE_PAYLOAD=/data/local/tmp/light_l16_timeout_probe_once.sh
     REMOTE_RESULT=/data/local/tmp/light_l16_timeout_probe.result
     REMOTE_ARM=/data/local/tmp/light_l16_timeout_probe.armed
@@ -155,6 +156,7 @@ elif [ "${1-}" = "$CONFIRM_TIMEOUT_PROBE" ]; then
     REMOTE_TIMEOUT_SHIM=/data/local/tmp/liblcc_async_timeout_shim.so
     ARM_VALUE=TIMEOUT_PROBE_ALL16_8000000000NS_GAIN_1.0_ONCE
     EXPECTED_MODE=TIMEOUT_PROBE_ALL16_8S_ONCE
+    PROFILE=timeout-probe-all16-8s
     OUTPUT_PREFIX=timeout-probe-all16-8s
     POLL_LIMIT=300
     PASS_REBOOT_REQUIRED=yes
@@ -163,8 +165,7 @@ elif [ "${1-}" = "$CONFIRM_TIMEOUT_PROBE" ]; then
     EXPECTED_EXPOSURE_COUNT=1
     EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
     EXPECTED_EXPOSURE_PLAN=selected:8000000000
-elif [ "${1-}" = "$CONFIRM_TIMEOUT_PROBE_6S" ]; then
-    [ "$#" -eq 1 ] || exit 2
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_TIMEOUT_PROBE_6S" ]; then
     REMOTE_PAYLOAD=/data/local/tmp/light_l16_timeout_probe_6s_once.sh
     REMOTE_RESULT=/data/local/tmp/light_l16_timeout_probe_6s.result
     REMOTE_ARM=/data/local/tmp/light_l16_timeout_probe_6s.armed
@@ -173,6 +174,7 @@ elif [ "${1-}" = "$CONFIRM_TIMEOUT_PROBE_6S" ]; then
     REMOTE_TIMEOUT_SHIM=/data/local/tmp/liblcc_async_timeout_shim.so
     ARM_VALUE=TIMEOUT_PROBE_ALL16_6000000000NS_GAIN_1.0_ONCE
     EXPECTED_MODE=TIMEOUT_PROBE_ALL16_6S_ONCE
+    PROFILE=timeout-probe-all16-6s
     OUTPUT_PREFIX=timeout-probe-all16-6s
     POLL_LIMIT=300
     PASS_REBOOT_REQUIRED=yes
@@ -181,13 +183,52 @@ elif [ "${1-}" = "$CONFIRM_TIMEOUT_PROBE_6S" ]; then
     EXPECTED_EXPOSURE_COUNT=1
     EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
     EXPECTED_EXPOSURE_PLAN=selected:6000000000
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_MMAP_PROBE_6S" ]; then
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_mmap_probe_6s_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_mmap_probe_6s.result
+    REMOTE_ARM=/data/local/tmp/light_l16_mmap_probe_6s.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_mmap_probe_6s_run
+    REMOTE_SHIM=/data/local/tmp/liblcc_async_writer_shim.so
+    REMOTE_TIMEOUT_SHIM=/data/local/tmp/liblcc_async_timeout_shim.so
+    # The extra-preload slot carries the diagnostic build here, so it is
+    # pinned to that hash rather than the timeout-patching one.
+    EXPECTED_TIMEOUT_SHIM_SIZE=10152
+    EXPECTED_TIMEOUT_SHIM_SHA1=88eb6020327fc3776eeb4ab193fc4d1cb441dcbf
+    ARM_VALUE=MMAP_PROBE_ALL16_6000000000NS_GAIN_1.0_ONCE
+    EXPECTED_MODE=MMAP_PROBE_ALL16_6S_ONCE
+    PROFILE=mmap-probe-all16-6s
+    OUTPUT_PREFIX=mmap-probe-all16-6s
+    POLL_LIMIT=300
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=no
+    TIMEOUT_SHIM_REQUIRED=yes
+    EXPECTED_EXPOSURE_COUNT=1
+    EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
+    EXPECTED_EXPOSURE_PLAN=selected:6000000000
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_BARE_6S" ]; then
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_bare_6s_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_bare_6s.result
+    REMOTE_ARM=/data/local/tmp/light_l16_bare_6s.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_bare_6s_run
+    ARM_VALUE=BARE_ALL16_6000000000NS_GAIN_1.0_ONCE
+    EXPECTED_MODE=BARE_ALL16_6S_ONCE
+    PROFILE=bare-all16-6s
+    OUTPUT_PREFIX=bare-all16-6s
+    POLL_LIMIT=300
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=no
+    TIMEOUT_SHIM_REQUIRED=no
+    EXPECTED_EXPOSURE_COUNT=1
+    EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
+    EXPECTED_EXPOSURE_PLAN=selected:6000000000
 else
-    printf 'usage: %s {%s|%s|%s|%s|%s|%s|%s|%s|%s|%s}\n' \
+    printf 'usage: %s {%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s}\n' \
         "$0" "$CONFIRM_A1" "$CONFIRM_A1_CENTER_AF" \
         "$CONFIRM_A1_INLINE_AF" "$CONFIRM_A_GROUP_INLINE_AF" \
         "$CONFIRM_A1_ASYNC" "$CONFIRM_ALL16" "$CONFIRM_ALL16_ASYNC" \
         "$CONFIRM_ALL16_HDR_ASYNC" "$CONFIRM_TIMEOUT_PROBE" \
-        "$CONFIRM_TIMEOUT_PROBE_6S" >&2
+        "$CONFIRM_TIMEOUT_PROBE_6S" "$CONFIRM_MMAP_PROBE_6S" \
+        "$CONFIRM_BARE_6S" >&2
     printf 'Profiles perform one real lcc capture request. HDR uses fixed 1.25/5/20 ms module roles; AF, shim, and ALL16 profiles always reboot.\n' >&2
     exit 2
 fi

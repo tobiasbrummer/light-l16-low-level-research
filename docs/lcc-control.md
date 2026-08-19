@@ -755,10 +755,10 @@ to the fixed `A1-A5` mask as the next still-unverified multi-module step.
 
 ## Device-side wrapper syntax
 
-The current 50,264-byte ten-profile payload has host SHA-1:
+The current 54,223-byte twelve-profile payload has host SHA-1:
 
 ```text
-caee8d954e44a75ae9ef88ecfcc8f3f3fddbfe05
+abdf88fce0025a2a1994198228373d0825c73ec5
 ```
 
 Its host shell syntax check and automated tests pass. The ninth and tenth
@@ -792,7 +792,12 @@ no lens timeout. Its matching supervisor TXT also verifies the expected payload
 and shim hashes, focused-lock result, zero LCC exit, complete cleanup, settled
 services and camera clients, identical LRI size/SHA-1, and intended normal
 reboot. The seventh profile's exact per-module HDR exposure
-assignment also remains unexecuted. The preceding 48,937-byte nine-profile payload had SHA-1
+assignment also remains unexecuted. The twelfth profile is the control for both: the same 6 s capture with no
+preload at all. The eleventh profile repeats the 6 s capture with the mmap-failure probe in
+the extra-preload slot instead of the timeout patch, to recover the errno the
+HAL omits. The preceding 50,264-byte ten-profile payload had SHA-1
+`caee8d954e44a75ae9ef88ecfcc8f3f3fddbfe05`. The preceding 48,937-byte
+nine-profile payload had SHA-1
 `51ba0377db913cf4361a34e301935d361011eeb4`; it carried the 8 s probe alone and
 completed the physically executed run that motivated the 6 s probe. The
 preceding 43,160-byte seven-profile
@@ -1331,15 +1336,86 @@ consequence rather than the cause.
 `errno` would separate the remaining possibilities and the HAL does not print
 it. That is the next measurement.
 
+### The errno, and what it showed
+
+The HAL prints the failing descriptor but not the reason, so the same preload
+was rebuilt with an `mmap` interposer that forwards every call unchanged and
+adds the errno. Eighteen failures, one answer:
+
+```text
+L16_ASYNC_SHIM mmap_failed fd=94 length=16228352 errno=9
+```
+
+`errno` 9 is `EBADF`. The descriptors are not merely unmappable, they are
+closed. Not memory, not size, not permissions.
+
+The marker order says who closed them. A successful all-16 run at 20 ms:
+
+```text
+enqueue_ok -> worker_start -> worker_done_ok -> close_wait -> close_continue
+Closed camera pipeline, 1
+```
+
+The failing 6 s run:
+
+```text
+close_continue -> enqueue_ok -> worker_start
+Closed camera pipeline, 0 -> dtor -> mmap_failed x18 -> worker_done_ok
+```
+
+In the failing run `closeCamera` is reached *before* `writeFile` starts. That
+is why `close_wait` is absent: the preload joins the writer thread in
+`closeCamera`, and at that moment no thread exists yet. `writeFile` then runs
+on a worker alongside the teardown and maps descriptors the teardown has just
+closed. The two or three buffers that get through are the ones that win the
+race.
+
+The ordering itself comes from `lcc`: `thread_time_out` is 7 s for a 6 s
+exposure, and `lcc` proceeds to `closeCamera` on that schedule while
+integration and readout are still running. The HAL's own budget, which the
+timeout shim patches, is a different clock and does not govern this.
+
+### The ceiling is ours
+
+The control run settles it. Same capture, same 6 s, all sixteen modules, no
+preload of any kind:
+
+```text
+Closed camera pipeline, 1
+lri_output_size=259999993
+```
+
+A complete frame. Decoding it yields sixteen module surfaces at 4160x3120 with
+real pixel data, A1 through C6.
+
+There is no six-second exposure ceiling in the camera. Without a preload
+`writeFile` stays on the callback and finishes before anything is torn down,
+which is precisely what it did for every stock capture. The ceiling appears
+only when the async writer moves that work onto a thread nobody waits for.
+
+Every run that has ever shown the ceiling had the async writer loaded,
+including the long dark series, whose payload sets `USE_ASYNC_SHIM=yes`
+globally. That series aborted on capture 7 of 15 -- its first 6 s frame. Its
+6 s and 29 s exposures were never attempted by the hardware.
+
+The 24-capture dark frame series is unaffected: every exposure in it is 20 ms
+or shorter, far below where the ordering changes.
+
 ### Status
 
-The exposure ceiling remains unexplained. What is now excluded:
+Explained. The exposure ceiling was an artefact of the async writer, not a
+property of the camera.
 
-- The 15 s completion budget is not the binding limit.
-- The LRI is not truncated by an interrupted write.
-- The buffers are not lost to address-space exhaustion.
+The async writer is still worth having -- it was written against metadata
+buffer exhaustion during the 1.1 s synchronous write of a 260 MB all-16
+result, and it removes that failure class completely (49 `Invalid argument!!!`
+to 0), at the cost of more `Bad fd for extra data` (184 to 227). Both counts
+come from otherwise identical 20 ms all-16 runs. What it lacks is a case for
+`writeFile` arriving after `closeCamera`, where going asynchronous is exactly
+wrong and running on the callback is exactly right.
 
-What is established independently of the failure: the timeout field at instance
+Also established, independently of all this: the timeout field at instance
 offset `0x24` is real, the formula predicting it holds on hardware, and it can
 be patched safely. The shim verifies the field against the predicted value
-before writing and refuses otherwise.
+before writing and refuses otherwise. It simply does not lift the ceiling,
+because the ceiling was never its clock.

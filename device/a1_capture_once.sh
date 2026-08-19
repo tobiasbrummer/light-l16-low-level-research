@@ -11,6 +11,7 @@ RUN_AUTOFOCUS=no
 RUN_FACTORY_ASIC_RESET=no
 USE_A1_AF_SHIM=no
 USE_TIMEOUT_SHIM=no
+TIMEOUT_SHIM_VARIANT=timeout_patch
 EXPOSURE_COUNT=1
 EXPOSURE_ARGS=20000000
 EXPOSURE_ORDER=common_for_selected_modules
@@ -186,6 +187,62 @@ case "$0" in
         EXPOSURE_ORDER=common_for_selected_modules
         EXPOSURE_PLAN=selected:6000000000
         ;;
+    /data/local/tmp/light_l16_mmap_probe_6s_once.sh)
+        OUT=/data/local/tmp/light_l16_mmap_probe_6s.result
+        ARM_FILE=/data/local/tmp/light_l16_mmap_probe_6s.armed
+        ARM_VALUE=MMAP_PROBE_ALL16_6000000000NS_GAIN_1.0_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_mmap_probe_6s_run
+        MODE=MMAP_PROBE_ALL16_6S_ONCE
+        MASK0=FE
+        MASK1=FF
+        MASK2=01
+        SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3 async_shim=required extra_preload=mmap_probe probe=6s'
+        TIMEOUT_SHIM_VARIANT=mmap_probe
+        # Same capture as the 6 s timeout probe, different preload.  The
+        # USE_TIMEOUT_SHIM slot loads whichever extra preload the host pins by
+        # hash; here that is the diagnostic build, which reports the errno
+        # behind each failed mapping and patches nothing.  A capture at this
+        # exposure fails either way -- the point is the reason, not the result.
+        CAPTURE_TIMEOUT_SECONDS=180
+        MIN_DATA_FREE_KB=1048576
+        DIAGNOSTIC_LOG_LINES=2000
+        ALLOW_CLEAN_NO_REBOOT=no
+        USE_ASYNC_SHIM=no
+        USE_TIMEOUT_SHIM=yes
+        EXPOSURE_COUNT=1
+        EXPOSURE_ARGS=6000000000
+        EXPOSURE_ORDER=common_for_selected_modules
+        EXPOSURE_PLAN=selected:6000000000
+        ;;
+    /data/local/tmp/light_l16_bare_6s_once.sh)
+        OUT=/data/local/tmp/light_l16_bare_6s.result
+        ARM_FILE=/data/local/tmp/light_l16_bare_6s.armed
+        ARM_VALUE=BARE_ALL16_6000000000NS_GAIN_1.0_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_bare_6s_run
+        MODE=BARE_ALL16_6S_ONCE
+        MASK0=FE
+        MASK1=FF
+        MASK2=01
+        SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3 no_preload=yes probe=6s'
+        # The control for both 6 s probes: same capture, no preload at all.
+        # Every run that has ever shown the six-second ceiling -- including
+        # the long dark series -- had the async writer loaded, which moves
+        # writeFile onto a worker.  In the failing runs closeCamera is reached
+        # before writeFile even starts, so that worker maps descriptors the
+        # teardown has already closed.  Without any preload writeFile stays on
+        # the callback, and this profile is what says whether the ceiling is
+        # lcc's own timer or an artefact of our instrumentation.
+        CAPTURE_TIMEOUT_SECONDS=180
+        MIN_DATA_FREE_KB=1048576
+        DIAGNOSTIC_LOG_LINES=2000
+        ALLOW_CLEAN_NO_REBOOT=no
+        USE_ASYNC_SHIM=no
+        USE_TIMEOUT_SHIM=no
+        EXPOSURE_COUNT=1
+        EXPOSURE_ARGS=6000000000
+        EXPOSURE_ORDER=common_for_selected_modules
+        EXPOSURE_PLAN=selected:6000000000
+        ;;
     /data/local/tmp/light_l16_all16_hdr_async_capture_once.sh)
         OUT=/data/local/tmp/light_l16_all16_hdr_async_capture.result
         ARM_FILE=/data/local/tmp/light_l16_all16_hdr_async_capture.armed
@@ -242,8 +299,22 @@ EXPECTED_HAL_SIZE=1338100
 EXPECTED_HAL_SHA1=016602174e0635e79cda5566d5e850c1294a9300
 EXPECTED_SHIM_SIZE=8904
 EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8
-EXPECTED_TIMEOUT_SHIM_SIZE=9904
-EXPECTED_TIMEOUT_SHIM_SHA1=243e6419be6c6e06e4cb21c5204c74339e79985f
+# Both builds come from the same source and occupy the same preload slot; the
+# profile decides which one is acceptable, and only these two are.
+case "$TIMEOUT_SHIM_VARIANT" in
+    timeout_patch)
+        EXPECTED_TIMEOUT_SHIM_SIZE=9904
+        EXPECTED_TIMEOUT_SHIM_SHA1=243e6419be6c6e06e4cb21c5204c74339e79985f
+        ;;
+    mmap_probe)
+        EXPECTED_TIMEOUT_SHIM_SIZE=10152
+        EXPECTED_TIMEOUT_SHIM_SHA1=88eb6020327fc3776eeb4ab193fc4d1cb441dcbf
+        ;;
+    *)
+        printf 'unknown timeout shim variant: %s\n' "$TIMEOUT_SHIM_VARIANT" >&2
+        exit 2
+        ;;
+esac
 EXPECTED_AF_SHIM_SIZE=13764
 EXPECTED_AF_SHIM_SHA1=67647b71767ab2b68a214fae87578e24eb3433b2
 
@@ -1120,17 +1191,28 @@ if [ "$USE_ASYNC_SHIM" = "yes" ]; then
 fi
 
 if [ "$USE_TIMEOUT_SHIM" = "yes" ]; then
-    for MARKER in \
-        loaded preload_cleared resolve_targets_ok preload_child_selftest_ok \
-        timeout_patched enqueue_ok worker_start worker_done_ok \
-        close_wait close_continue helper_commands_ok close_reports_ok
+    # The timeout-patching build is expected to complete a capture, so every
+    # marker through close_reports_ok must appear.  The diagnostic build is
+    # not: the capture it observes is the one that fails, and its whole output
+    # is failure lines.  Only the markers describing the preload itself are
+    # required there, and mmap_failed is the measurement, not a fault.
+    case "$TIMEOUT_SHIM_VARIANT" in
+        mmap_probe)
+            REQUIRED_MARKERS='loaded preload_cleared resolve_targets_ok preload_child_selftest_ok'
+            SHIM_ERROR_PATTERN='^L16_ASYNC_SHIM .*(error|not_patched)'
+            ;;
+        *)
+            REQUIRED_MARKERS='loaded preload_cleared resolve_targets_ok preload_child_selftest_ok timeout_patched enqueue_ok worker_start worker_done_ok close_wait close_continue helper_commands_ok close_reports_ok'
+            SHIM_ERROR_PATTERN='^L16_ASYNC_SHIM .*(error|failed|not_patched)'
+            ;;
+    esac
+    for MARKER in $REQUIRED_MARKERS
     do
         MARKER_COUNT=$(/system/bin/toybox grep -c \
             "^L16_ASYNC_SHIM $MARKER$" "$WORKDIR/lcc.txt")
         [ "$MARKER_COUNT" = "1" ] || fail "timeout_shim_marker_${MARKER}_count_${MARKER_COUNT}"
     done
-    if /system/bin/toybox grep -Eq \
-        '^L16_ASYNC_SHIM .*(error|failed|not_patched)' "$WORKDIR/lcc.txt"
+    if /system/bin/toybox grep -Eq "$SHIM_ERROR_PATTERN" "$WORKDIR/lcc.txt"
     then
         fail timeout_shim_reported_error
     fi
