@@ -1098,3 +1098,52 @@ def test_every_wrapper_profile_sets_the_variables_the_report_prints() -> None:
     for name, names in assigned.items():
         missing = sorted(common - names)
         assert not missing, f"{name} does not set {', '.join(missing)}"
+
+
+def test_the_series_profiles_verify_a_series_not_a_single_exposure() -> None:
+    """A dark frame series reports captures, not an exposure manifest.
+
+    The single-capture profiles pin exposure_argument_count and the per-module
+    order.  A series has neither -- it has a plan and a completed count -- so
+    the wrapper must check those instead rather than compare against
+    "unknown" and reject every series run.
+    """
+    wrapper = (ROOT / "host" / "run_a1_capture_once.sh").read_text(encoding="utf-8")
+    head, _, body = wrapper.partition("\nRUN_STAMP=")
+
+    for confirm in ("CONFIRM_DARK_SERIES", "CONFIRM_DARK_LONG_SERIES"):
+        assert confirm in head, f"{confirm} is not offered"
+
+    parts = re.split(r'\n(?:el)?if \[ "\$#" -eq 1 \] && \[ "\$1" = ', head)
+    series = [b for b in parts[1:] if "DARK_FRAME" in b]
+    assert len(series) == 2
+    for branch in series:
+        # The series payload is a different file from the capture payload.
+        assert 'PAYLOAD="$REPO_ROOT/device/dark_frame_series_once.sh"' in branch
+        assert "EXPOSURE_MANIFEST_REQUIRED=no" in branch
+        assert "EXPECTED_CAPTURES_REQUESTED=" in branch
+        assert "EXPECTED_CAPTURE_PLAN=" in branch
+        # A series of long exposures needs far longer than a single capture.
+        poll = re.search(r"POLL_LIMIT=(\d+)", branch)
+        assert poll and int(poll.group(1)) >= 600
+
+    # The manifest comparison must be skippable, and the series check must
+    # actually be enforced rather than merely recorded.
+    assert 'if [ "$EXPOSURE_MANIFEST_REQUIRED" = "yes" ]' in body
+    assert '"$RESULT_CAPTURES_REQUESTED" = "$EXPECTED_CAPTURES_REQUESTED"' in body
+    assert '"$RESULT_CAPTURE_PLAN" = "$EXPECTED_CAPTURE_PLAN"' in body
+    assert '"$RESULT_CAPTURES_COMPLETED" = "$EXPECTED_CAPTURES_REQUESTED"' in body
+
+
+def test_the_usage_line_offers_every_profile() -> None:
+    """It listed a placeholder per profile and drifted twice while adding them.
+
+    Building the line from one list removes the counting; this checks that the
+    list itself stays complete.
+    """
+    wrapper = (ROOT / "host" / "run_a1_capture_once.sh").read_text(encoding="utf-8")
+    defined = set(re.findall(r"^(CONFIRM_[A-Z0-9_]+)=", wrapper, re.M))
+    listed = set(re.findall(r"\$(CONFIRM_[A-Z0-9_]+)", 
+                            wrapper[wrapper.index("ALL_CONFIRMS="):]))
+    assert defined, "no profiles found"
+    assert defined <= listed, f"missing from usage: {sorted(defined - listed)}"

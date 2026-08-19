@@ -18,6 +18,8 @@ CONFIRM_TIMEOUT_PROBE_6S=--execute-timeout-shim-all16-6s-once-and-reboot
 CONFIRM_MMAP_PROBE_6S=--execute-mmap-probe-all16-6s-once-and-reboot
 CONFIRM_BARE_6S=--execute-bare-all16-6s-once-and-reboot
 CONFIRM_TIMEOUT_PROBE_29S=--execute-timeout-shim-all16-29s-once-and-reboot
+CONFIRM_DARK_SERIES=--execute-dark-frame-series-24-captures-once-and-reboot
+CONFIRM_DARK_LONG_SERIES=--execute-dark-frame-long-series-15-captures-once-and-reboot
 EXPECTED_SHIM_SIZE=9080
 EXPECTED_SHIM_SHA1=0b93dc17a2c4219943293d96b7edda39be61613d
 EXPECTED_TIMEOUT_SHIM_SIZE=10084
@@ -28,6 +30,10 @@ EXPECTED_AF_SHIM_SHA1=67647b71767ab2b68a214fae87578e24eb3433b2
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(dirname "$SCRIPT_DIR")
 PAYLOAD="$REPO_ROOT/device/a1_capture_once.sh"
+# Single captures pin an exposure manifest; series pin a plan instead.
+EXPOSURE_MANIFEST_REQUIRED=yes
+EXPECTED_CAPTURES_REQUESTED=
+EXPECTED_CAPTURE_PLAN=
 ADB=${LIGHT_L16_ADB:-adb}
 ASYNC_SHIM_REQUIRED=no
 TIMEOUT_SHIM_REQUIRED=no
@@ -245,14 +251,55 @@ elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_TIMEOUT_PROBE_29S" ]; then
     EXPECTED_EXPOSURE_COUNT=1
     EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
     EXPECTED_EXPOSURE_PLAN=selected:29000000000
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_DARK_SERIES" ]; then
+    PROFILE=dark-frame-series
+    PROFILE_LABEL=DARK-FRAME-SERIES
+    PAYLOAD="$REPO_ROOT/device/dark_frame_series_once.sh"
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_dark_frame_series_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_dark_frame_series.result
+    REMOTE_ARM=/data/local/tmp/light_l16_dark_frame_series.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_dark_frame_series_run
+    REMOTE_SHIM=/data/local/tmp/liblcc_async_writer_shim.so
+    ARM_VALUE=DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE
+    EXPECTED_MODE=DARK_FRAME_SERIES_ALL16_24_CAPTURES_ONCE
+    OUTPUT_PREFIX=dark-frame-series
+    POLL_LIMIT=900
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=yes
+    EXPOSURE_MANIFEST_REQUIRED=no
+    EXPECTED_CAPTURES_REQUESTED=24
+    EXPECTED_CAPTURE_PLAN='10000:1.0 10000:1.0 10000:1.0 1250000:1.0 1250000:1.0 1250000:1.0 5000000:1.0 5000000:1.0 5000000:1.0 20000000:1.0 20000000:1.0 20000000:1.0 1250000:2.0 1250000:2.0 1250000:2.0 1250000:3.75 1250000:3.75 1250000:3.75 1250000:4.0 1250000:4.0 1250000:4.0 1250000:7.5 1250000:7.5 1250000:7.5'
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_DARK_LONG_SERIES" ]; then
+    PROFILE=dark-frame-long-series
+    PROFILE_LABEL=DARK-FRAME-LONG-SERIES
+    PAYLOAD="$REPO_ROOT/device/dark_frame_series_once.sh"
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_dark_frame_long_series_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_dark_frame_long_series.result
+    REMOTE_ARM=/data/local/tmp/light_l16_dark_frame_long_series.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_dark_frame_long_series_run
+    REMOTE_SHIM=/data/local/tmp/liblcc_async_writer_shim.so
+    ARM_VALUE=DARK_FRAME_LONG_SERIES_ALL16_15_CAPTURES_ONCE
+    EXPECTED_MODE=DARK_FRAME_LONG_SERIES_ALL16_15_CAPTURES_ONCE
+    OUTPUT_PREFIX=dark-frame-long-series
+    # Three 29 s frames plus three at 6 s, each followed by about 14 s of
+    # readout, and nine shorter ones.  The series does not reboot between
+    # captures, so this is one wait of roughly ten minutes.
+    POLL_LIMIT=900
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=yes
+    EXPOSURE_MANIFEST_REQUIRED=no
+    EXPECTED_CAPTURES_REQUESTED=15
+    EXPECTED_CAPTURE_PLAN='100000000:1.0 100000000:1.0 100000000:1.0 1000000000:1.0 1000000000:1.0 1000000000:1.0 6000000000:1.0 6000000000:1.0 6000000000:1.0 29000000000:1.0 29000000000:1.0 29000000000:1.0 100000000:1.0 100000000:1.0 100000000:1.0'
 else
-    printf 'usage: %s {%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s}\n' \
-        "$0" "$CONFIRM_A1" "$CONFIRM_A1_CENTER_AF" \
-        "$CONFIRM_A1_INLINE_AF" "$CONFIRM_A_GROUP_INLINE_AF" \
-        "$CONFIRM_A1_ASYNC" "$CONFIRM_ALL16" "$CONFIRM_ALL16_ASYNC" \
-        "$CONFIRM_ALL16_HDR_ASYNC" "$CONFIRM_TIMEOUT_PROBE" \
-        "$CONFIRM_TIMEOUT_PROBE_6S" "$CONFIRM_MMAP_PROBE_6S" \
-        "$CONFIRM_BARE_6S" "$CONFIRM_TIMEOUT_PROBE_29S" >&2
+    # Built from one list, so adding a profile cannot leave the usage line
+    # with the wrong number of placeholders -- which it silently did twice.
+    ALL_CONFIRMS="$CONFIRM_A1 $CONFIRM_A1_CENTER_AF $CONFIRM_A1_INLINE_AF \
+$CONFIRM_A_GROUP_INLINE_AF $CONFIRM_A1_ASYNC $CONFIRM_ALL16 \
+$CONFIRM_ALL16_ASYNC $CONFIRM_ALL16_HDR_ASYNC $CONFIRM_TIMEOUT_PROBE \
+$CONFIRM_TIMEOUT_PROBE_6S $CONFIRM_MMAP_PROBE_6S $CONFIRM_BARE_6S \
+$CONFIRM_TIMEOUT_PROBE_29S $CONFIRM_DARK_SERIES $CONFIRM_DARK_LONG_SERIES"
+    printf 'usage: %s {%s}\n' "$0" \
+        "$(printf '%s|' $ALL_CONFIRMS | sed 's/|$//')" >&2
     printf 'Profiles perform one real lcc capture request. HDR uses fixed 1.25/5/20 ms module roles; AF, shim, and ALL16 profiles always reboot.\n' >&2
     exit 2
 fi
@@ -286,6 +333,9 @@ A1_AF_SHIM_STATUS=unknown
 RESULT_EXPOSURE_COUNT=unknown
 RESULT_EXPOSURE_ORDER=unknown
 RESULT_EXPOSURE_PLAN=unknown
+RESULT_CAPTURES_REQUESTED=unknown
+RESULT_CAPTURES_COMPLETED=unknown
+RESULT_CAPTURE_PLAN=unknown
 PROPERTIES_CLEARED=no
 REMOTE_FILES_CLEARED=no
 TRIGGER_SENT=no
@@ -364,6 +414,8 @@ pull_lri_artifact() {
         printf 'exposure_argument_count=%s\n' "$RESULT_EXPOSURE_COUNT"
         printf 'exposure_argument_module_order=%s\n' "$RESULT_EXPOSURE_ORDER"
         printf 'exposure_plan_module_order=%s\n' "$RESULT_EXPOSURE_PLAN"
+        printf 'captures_requested=%s\n' "$RESULT_CAPTURES_REQUESTED"
+        printf 'captures_completed=%s\n' "$RESULT_CAPTURES_COMPLETED"
         printf 'remote_path=%s\n' "$REMOTE_LRI"
         printf 'local_file=%s\n' "$LRI_NAME"
         printf 'size=%s\n' "$LOCAL_LRI_SIZE"
@@ -627,17 +679,39 @@ if [ "$RESULT_SEEN" = "yes" ]; then
     RESULT_EXPOSURE_COUNT=$(sed -n 's/^exposure_argument_count=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     RESULT_EXPOSURE_ORDER=$(sed -n 's/^exposure_argument_module_order=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     RESULT_EXPOSURE_PLAN=$(sed -n 's/^exposure_plan_module_order=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    RESULT_CAPTURES_REQUESTED=$(sed -n 's/^captures_requested=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    RESULT_CAPTURES_COMPLETED=$(sed -n 's/^captures_completed=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
+    RESULT_CAPTURE_PLAN=$(sed -n 's/^capture_plan=//p' "$HOST_OUTPUT/result.txt" | tail -n 1)
     [ "$RESULT_MODE" = "$EXPECTED_MODE" ] || {
         printf 'completed result has unexpected mode: %s\n' "$RESULT_MODE" >&2
         exit 1
     }
     if [ "$CAPTURE_ATTEMPTED" = "yes" ]; then
-        [ "$RESULT_EXPOSURE_COUNT" = "$EXPECTED_EXPOSURE_COUNT" ] && \
-            [ "$RESULT_EXPOSURE_ORDER" = "$EXPECTED_EXPOSURE_ORDER" ] && \
-            [ "$RESULT_EXPOSURE_PLAN" = "$EXPECTED_EXPOSURE_PLAN" ] || {
-                printf 'completed result has unexpected exposure manifest\n' >&2
-                exit 1
-            }
+        if [ "$EXPOSURE_MANIFEST_REQUIRED" = "yes" ]; then
+            [ "$RESULT_EXPOSURE_COUNT" = "$EXPECTED_EXPOSURE_COUNT" ] && \
+                [ "$RESULT_EXPOSURE_ORDER" = "$EXPECTED_EXPOSURE_ORDER" ] && \
+                [ "$RESULT_EXPOSURE_PLAN" = "$EXPECTED_EXPOSURE_PLAN" ] || {
+                    printf 'completed result has unexpected exposure manifest\n' >&2
+                    exit 1
+                }
+        else
+            # A series states a plan and how much of it ran.  Comparing the
+            # plan catches a payload that is not the one that was reviewed;
+            # comparing completed against requested catches an abort, which is
+            # exactly how the long series failed before.
+            [ "$RESULT_CAPTURES_REQUESTED" = "$EXPECTED_CAPTURES_REQUESTED" ] && \
+                [ "$RESULT_CAPTURE_PLAN" = "$EXPECTED_CAPTURE_PLAN" ] || {
+                    printf 'completed result has unexpected capture plan\n' >&2
+                    exit 1
+                }
+        fi
+    fi
+    if [ "$FINAL_STATUS" = "PASS" ] && [ "$EXPOSURE_MANIFEST_REQUIRED" = "no" ]; then
+        [ "$RESULT_CAPTURES_COMPLETED" = "$EXPECTED_CAPTURES_REQUESTED" ] || {
+            printf 'PASS series completed %s of %s captures\n' \
+                "$RESULT_CAPTURES_COMPLETED" "$EXPECTED_CAPTURES_REQUESTED" >&2
+            exit 1
+        }
     fi
     if [ "$FINAL_STATUS" = "PASS" ]; then
         [ "$CAPTURE_ATTEMPTED" = "yes" ] && \
