@@ -33,8 +33,23 @@ extern long write(int fd, const void *buffer, l16_size_t length);
 
 #define L16_RTLD_NOW 2
 #define L16_RTLD_LOCAL 0
+#define L16_RTLD_NEXT ((void *)-1L)
+#ifdef L16_LOG_MMAP_FAILURES
+/* bionic keeps errno per thread behind __errno(); MAP_FAILED and ENOSYS are
+ * ABI constants, not implementation details, so spelling them out here is
+ * safe and keeps this build free of platform headers. */
+typedef long l16_off_t;
+extern volatile int *__errno(void);
+#define l16_errno (*__errno())
+#define L16_MAP_FAILED ((void *)-1)
+#define L16_ENOSYS 38
+#endif
 #else
 #include <dlfcn.h>
+#ifdef L16_LOG_MMAP_FAILURES
+#include <errno.h>
+#include <sys/mman.h>
+#endif
 #include <pthread.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -45,6 +60,13 @@ extern long write(int fd, const void *buffer, l16_size_t length);
 typedef size_t l16_size_t;
 #define L16_RTLD_NOW RTLD_NOW
 #define L16_RTLD_LOCAL RTLD_LOCAL
+#define L16_RTLD_NEXT RTLD_NEXT
+#ifdef L16_LOG_MMAP_FAILURES
+typedef off_t l16_off_t;
+#define l16_errno errno
+#define L16_MAP_FAILED MAP_FAILED
+#define L16_ENOSYS ENOSYS
+#endif
 #endif
 
 extern int unsetenv(const char *name);
@@ -98,6 +120,155 @@ extern char **environ;
             write(2, message, (l16_size_t)(sizeof(message) - 1));              \
         (void)write_result;                                                     \
     } while (0)
+
+#ifdef L16_LOG_MMAP_FAILURES
+/* Diagnostic only: report why a mapping failed.
+ *
+ * LccInterface::writeFile prints "mmap failed on ion fd: %d" and stops there,
+ * so a failed long exposure names the descriptor but never the reason.  This
+ * interposes mmap, forwards every call unchanged, and writes one line for
+ * each failure.  It changes no argument and no result.
+ *
+ * errno is the payload, so it must survive the reporting: write() sets errno
+ * itself, and a caller that checked it after us would otherwise see ours
+ * rather than the kernel's.
+ *
+ * The formatting is done by hand because mmap is called from arbitrary
+ * contexts, including inside the allocator, where stdio is not safe.
+ */
+typedef void *(*l16_mmap_fn)(void *, l16_size_t, int, int, int, l16_off_t);
+
+static l16_mmap_fn l16_real_mmap;
+static unsigned int l16_mmap_failures_logged;
+static int l16_mmap_resolving;
+
+/* Resolving the real mmap needs dlsym, and dlsym may itself map memory.  That
+ * call re-enters this interposer while l16_real_mmap is still unset, which on
+ * the device recursed until the stack was gone:
+ *
+ *     signal 11 (SIGSEGV), fault addr 0xff4a9fb0
+ *     #00 pc 00000a30  liblcc_..._shim.so (mmap+51)
+ *
+ * So the re-entrant case bypasses libc entirely and issues the system call.
+ * ARM32 has only mmap2, whose offset is counted in pages; the host build is
+ * used by the tests, where mmap takes a byte offset.
+ */
+#if defined(__arm__)
+#define L16_SYS_MMAP 192
+#define L16_MMAP_OFFSET_SHIFT 12
+#elif defined(__x86_64__)
+#define L16_SYS_MMAP 9
+#define L16_MMAP_OFFSET_SHIFT 0
+#elif defined(__aarch64__)
+#define L16_SYS_MMAP 222
+#define L16_MMAP_OFFSET_SHIFT 0
+#else
+#error "no mmap system call number for this architecture"
+#endif
+
+extern long syscall(long number, ...);
+
+static void *l16_raw_mmap(void *address, l16_size_t length, int protection,
+                          int flags, int descriptor, l16_off_t offset)
+{
+    long result = syscall(
+        (long)L16_SYS_MMAP,
+        address,
+        (unsigned long)length,
+        (long)protection,
+        (long)flags,
+        (long)descriptor,
+        (unsigned long)offset >> L16_MMAP_OFFSET_SHIFT
+    );
+    return (void *)result;
+}
+
+static char *l16_append_literal(char *out, const char *end, const char *text)
+{
+    while (*text != '\0' && out < end) {
+        *out++ = *text++;
+    }
+    return out;
+}
+
+static char *l16_append_signed(char *out, const char *end, long value)
+{
+    char digits[24];
+    unsigned long magnitude;
+    int count = 0;
+
+    if (value < 0) {
+        if (out < end) {
+            *out++ = '-';
+        }
+        magnitude = (unsigned long)(-(value + 1)) + 1UL;
+    } else {
+        magnitude = (unsigned long)value;
+    }
+    do {
+        digits[count++] = (char)('0' + (magnitude % 10UL));
+        magnitude /= 10UL;
+    } while (magnitude != 0UL && count < (int)sizeof(digits));
+    while (count > 0 && out < end) {
+        *out++ = digits[--count];
+    }
+    return out;
+}
+
+__attribute__((visibility("default")))
+void *mmap(void *address, l16_size_t length, int protection, int flags,
+           int descriptor, l16_off_t offset)
+{
+    void *result;
+    int saved_errno;
+
+    if (l16_real_mmap == (l16_mmap_fn)0) {
+        union l16_mmap_cast {
+            void *object;
+            l16_mmap_fn function;
+        } cast;
+
+        if (l16_mmap_resolving) {
+            return l16_raw_mmap(address, length, protection, flags,
+                                descriptor, offset);
+        }
+        l16_mmap_resolving = 1;
+        cast.object = dlsym(L16_RTLD_NEXT, "mmap");
+        l16_real_mmap = cast.function;
+        l16_mmap_resolving = 0;
+        if (l16_real_mmap == (l16_mmap_fn)0 || l16_real_mmap == mmap) {
+            l16_real_mmap = l16_raw_mmap;
+        }
+    }
+
+    result = l16_real_mmap(address, length, protection, flags,
+                           descriptor, offset);
+    if (result != L16_MAP_FAILED) {
+        return result;
+    }
+
+    saved_errno = l16_errno;
+    if (l16_mmap_failures_logged < (unsigned int)(L16_LOG_MMAP_FAILURES)) {
+        char line[128];
+        char *out = line;
+        const char *end = line + sizeof(line);
+        long written;
+
+        l16_mmap_failures_logged++;
+        out = l16_append_literal(out, end, "L16_ASYNC_SHIM mmap_failed fd=");
+        out = l16_append_signed(out, end, (long)descriptor);
+        out = l16_append_literal(out, end, " length=");
+        out = l16_append_signed(out, end, (long)length);
+        out = l16_append_literal(out, end, " errno=");
+        out = l16_append_signed(out, end, (long)saved_errno);
+        out = l16_append_literal(out, end, "\n");
+        written = write(2, line, (l16_size_t)(out - line));
+        (void)written;
+    }
+    l16_errno = saved_errno;
+    return result;
+}
+#endif
 
 enum l16_writer_state {
     L16_IDLE = 0,
