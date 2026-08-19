@@ -23,6 +23,26 @@
           "sha1": "01b4ea363174240bee5a3005ba9c39f6cb529e6f",
           "size": 501352
         },
+        "system/etc/ASIC1.bin": {
+          "sha256": "a2ac9017b6f2b655a6c0988ae79fb7561dbde5b8d62d2c6b2e8abedf1da42f60",
+          "sha1": "5f0e97cca42ab572ce92a0cc130e2359087efff6",
+          "size": 489444
+        },
+        "system/etc/ASIC2.bin": {
+          "sha256": "bfadf9080187d3da62fe92417adb72b04d3dbb915eb3d16cefdd16ae8cbc1ff6",
+          "sha1": "04f0753946534c2132cf492bb07841b35461afdb",
+          "size": 416048
+        },
+        "system/etc/ASIC3.bin": {
+          "sha256": "76ae3e5d903c72fc360c764c541b1ffbe73274d6f687dd151f77577807e385c3",
+          "sha1": "e995aebfb7ca9db467889d34beefb06aa2798779",
+          "size": 416048
+        },
+        "system/etc/prog_app_p2": {
+          "sha256": "0ccbf4f9ac820e49ff99293d06279cc36889ca1f9cc3f733fd50317265ed133a",
+          "sha1": "d6d74641759f2e208beac4318507ea1b71923db4",
+          "size": 159664
+        },
         "system/lib/hw/camera.msm8996.so": {
           "sha256": "5beffc664583b7dd03de4be9a30ec2fec971805abc253533254fad897b669fc6",
           "sha1": "016602174e0635e79cda5566d5e850c1294a9300",

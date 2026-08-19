@@ -20,10 +20,14 @@ compatibility.
   `firmware` as camera-control APIs.
 - Do not execute recovered calibration, ASIC programming, or factory-init
   binaries.
-- The enabled wrapper is valid only for the exact checked identities and its
-  two fixed A1/all-16 profiles. Do not generalize it, add `prog_app_p2`,
-  suppress a profile's required post-attempt normal reboot, or reuse it while
-  a CameraService client exists.
+- The enabled host wrapper is valid only for the exact checked identities and
+  six compiled-in profiles documented in `docs/lcc-control.md`. Do not
+  generalize it, add another executable, suppress a profile's required
+  post-attempt normal reboot, or reuse it while a CameraService client exists.
+- The hostless app is narrower: fixed A1 at 20 ms and gain 1 only. Its root
+  supervisor must reboot after every possible camera attempt because there is
+  no independent host artifact pull. Do not remove its two-stage UI,
+  one-install lock, script hashes, outer timeout, or reboot fallback.
 - Never test on a device you do not own or administer with permission.
 
 ## Reporting a problem

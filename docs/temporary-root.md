@@ -165,3 +165,29 @@ and host-cleanup sequence. Hash inputs before and after reading where practical.
 Camera-control commands need additional service-state and `manual_control`
 cleanup. A successful UID-0 probe is not by itself authorization to use the raw
 driver sysfs nodes described in the safety policy.
+
+## Hostless Android validation
+
+The separate [`android/property-probe`](../android/property-probe/README.md)
+first establishes that an ordinary app UID may write and clear the required
+property class without starting `fihop`. Only after that test reports `PASS`
+with `cleanup=CLEAN`, the bounded
+[`android/root-runner-probe`](../android/root-runner-probe/README.md) can test
+the complete app-to-UID-0 transition.
+
+The second app does not accept a command or access the camera. It checks the
+exact device identity and vendor-script digest, stages one embedded identity
+payload in its private directory, triggers it once, and requires both neutral
+runner properties and removed private files at the end. This proves a local
+launcher path; it does not by itself make the camera-capture wrappers safe to
+run without their existing supervision and recovery logic.
+
+The separate [`android/a1-capture`](../android/a1-capture/README.md) adds that
+missing supervision for one deliberately fixed profile only: same-session A1
+center AF followed by A1 at 20 ms and gain 1. It builds and embeds the reviewed
+ARM32 focus preload, packages it with the existing device payload under a
+hash-pinned root supervisor, requires two deliberate taps and a one-install
+arm, and performs a normal reboot after every possible camera attempt. The app
+itself requests no permission and never opens Camera2. It is not a general root
+or camera-control API, and it does not yet provide hostless all-16 or HDR
+capture.

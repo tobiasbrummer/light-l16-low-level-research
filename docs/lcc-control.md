@@ -7,15 +7,16 @@ camera modules. It accepts a module mask plus common or per-module exposure,
 gain, resolution, and frame-rate values. The complete factory capture tuple is
 also statically known.
 
-This proves the userspace control interface. Two bounded live tests additionally
+This proves the userspace control interface. Bounded live tests additionally
 prove that the fixed wrapper can capture A1 alone on the examined production
-camera at 2.61 ms and 20 ms. A third test proves that the factory-derived
-explicit mask `FE FF 01` can return all 16 module surfaces in one 20 ms
-capture request. The repository provides mask tooling, a camera-read-only A1
-preflight, two tightly fixed execution profiles, and a conservative host-side
-log analyzer. This is not yet a claim that every arbitrary subset, direct
-focus operation, or direct mirror-control path works safely, nor does a common
-request prove nanosecond-level sensor synchronization.
+camera at 2.61 ms and 20 ms, including through the reversible async probe. A
+synchronous and an async test prove that the factory-derived explicit mask
+`FE FF 01` can return all 16 module surfaces in one 20 ms capture request. The
+repository provides mask tooling, a camera-read-only A1 preflight, seven tightly
+fixed execution profiles, and a conservative host-side log analyzer. This is
+not yet a claim that every arbitrary subset, direct focus operation, or direct
+mirror-control path works safely, nor does a common request prove
+nanosecond-level sensor synchronization.
 
 ## Relevant factory binary
 
@@ -76,6 +77,154 @@ The expected combined mask is `0x010102`. The helper rejects empty, unknown,
 out-of-range, and ambiguous global-plus-explicit masks. It does not generate or
 execute a capture command.
 
+## Focus, mirror position, and same-family capture
+
+The same factory binary contains a separate autofocus workflow (`flow_id=0`).
+Its parser accepts the same three-byte module mask followed by exactly four
+decimal ROI values (`x`, `y`, `width`, `height`) per selected module. The run
+path constructs a CCB message beginning with `0x5a 0x80`, sends it through the
+configured factory bridge, and waits up to 20 seconds for the asynchronous
+response. This is a statically confirmed module-selective autofocus operation,
+not an absolute lens-Hall-position setter.
+
+The first bounded A1 center-AF attempt on 2026-08-10 established an additional
+runtime precondition without moving the actuator. From an otherwise clean idle
+normal boot, workflow 0 emitted the expected `0x5a 0x80` request but the kernel
+reported `NACK: slave not responding, ensure its powered` and
+`I2C block write failed` for slave `0x08`. No interrupt arrived, the wrapper did
+not start the planned post-AF capture, and it requested its mandatory normal
+reboot. Post-boot checks found `manual_control=0`, the expected ASIC firmware,
+both services running, and no active camera client. This is evidence that the
+request never reached the autofocus controller, not evidence of an actuator
+failure.
+
+The `-m` values are not interchangeable ASIC choices: `0` selects the
+factory QUP-I2C bridge, while `1` and `2` select CCI0 and CCI1 sensor-register
+paths. The recovered factory actuator utility also uses `-m 0`, but always
+first invokes `prog_app_p2 -q`. Decompilation of the exact production binary
+shows that this option selects the normal strap state and toggles the reset
+GPIOs for all three ASICs, then returns before configuration parsing, SPI,
+erase, write, calibration, or firmware-programming paths. The revised bounded
+AF profile therefore hash-verifies that binary, executes only `-q`, requires
+the stock boot script's ASIC-ready response before AF, and uses only its fixed
+`-F` power-off branch during cleanup. This is a reversible all-ASIC reset, not
+an A1-only operation, so the normal Android reboot remains mandatory.
+
+The second bounded A1 center-AF attempt on 2026-08-10 exercised that revised
+path. `prog_app_p2 -q` returned zero and the stock readiness request returned
+`01 00`. The kernel then accepted all 13 bytes of transaction `0x0039` without
+the earlier NACK or any later I2C error, but workflow 0 received no interrupt
+within its 20-second wait. The wrapper therefore suppressed capture, ran the
+verified `-F` cleanup successfully, restored `manual_control=0`, and requested
+the mandatory normal reboot. CameraService reported no active client both
+immediately before and after the readiness probe. Static inspection shows that
+the AF workflow opens its response socket and writes the CCB request but,
+unlike capture workflow 1, never loads or opens the camera HAL. The strongest
+current hypothesis is therefore that the AF controller needs sensor/preview
+state established elsewhere. This is an inference, not proof: `01 00` proves
+the bridge/ASIC readiness query, not readiness of the contrast-AF engine.
+
+The current production sensor module sharpens that contract. Its autofocus
+handler is sensor event `0x54`; it rejects a zero-sized ROI and any ROI for
+which `x + width` or `y + height` exceeds the active sensor dimensions, then
+queues the four 16-bit ROI coordinates to the CCB. `ccb_set_focus_mode()` only
+stores the selected mode and `ccb_is_afRunning()` reads the controller's busy
+bit. `ccb_set_cam_af_mode()` sends CCB opcode `0x56` plus one mode byte. No
+absolute lens-Hall-position setter has been identified in this path.
+
+The mirror path is also more constrained than the exported names initially
+suggested. `ccb_set_mirror_update(fd, ccb_address)` sends the fixed three-byte
+payload `59 80 00`; its second argument is a CCB address, not a requested Hall
+position. `ccb_set_zoom_factor(fd, factor, ccb_address)` sends `5c 00` followed
+by the four bytes of the floating-point zoom factor. In the production sensor
+dispatcher, event `0x53` adjusts the crop from focal-length and zoom data,
+event `0x58` queues a mirror-move message with no target position, and event
+`0x59` queues only a one-byte mirror trigger. The higher controller explicitly
+ignores a zoom request while autofocus is running.
+
+An older recovered FTMSYS sensor library exports both `ccb_set_focus()` and
+`ccb_move_mirror()`, but the latter merely wakes its mirror worker through a
+condition variable; it is not an absolute-position write either. The strongest
+current interpretation is therefore that the normal stack derives mirror
+motion internally from bounded zoom/crop/focal-length state and records the
+Hall value as feedback. The exact zoom bounds and settling protocol still need
+to be recovered before a live mirror test. The embedded geometry labels B1,
+B2, B3, B5, C1, C2, C3, and C4 as `MOVABLE`; B4, C5, and C6 are `GLUED`, and
+the five A modules have no mirror. Direct mirror actuation remains outside the
+execution wrapper. The idle workflow-0 experiment should not simply be
+repeated; the next useful focus experiment needs a bounded normal Camera2/HAL
+preview state while retaining A1 selection and response logging. Any movable
+B/C mirror test remains later and requires separately recovered zoom bounds and
+settling semantics.
+
+### Recovered stock AE-then-AF ordering
+
+The production `light_camera.apk` has no `classes.dex`; its application DEX is
+embedded in the precompiled arm64 ODEx. Extracting that DEX from the exact
+backup and inspecting `AutoExposureManager`, `FocusManager`,
+`CaptureRequestManager`, and `ModeReqMgr` confirms the missing runtime context
+more precisely:
+
+- metering runs on an existing Camera2 preview session by installing one
+  `CONTROL_AE_REGIONS` rectangle in a repeating preview request;
+- the application retains per-frame `CaptureResult` objects and reads
+  `SENSOR_EXPOSURE_TIME` from them;
+- only after the AE stage does it create a separate preview-template request,
+  set one `CONTROL_AF_REGIONS` rectangle, set `CONTROL_AF_TRIGGER_START`, and
+  submit that request to the same active capture session;
+- the focus request also carries the selected focal length. The normal app
+  therefore supplies considerably more state than factory workflow 0's
+  standalone CCB request.
+
+This confirms that an active Camera2 session is a real stock precondition, not
+just an inference from the earlier timeout. It still does not establish that a
+third-party Camera2 client can access the same vendor path, nor that lens state
+survives closing that client before an `lcc` capture. The non-rooting
+`android/meter-focus-probe` APK tests exactly the first question. It must pass
+and close CameraService cleanly before AE/AF is coupled to the hostless capture
+supervisor.
+
+The first live run on the identified production camera passed this gate on
+2026-08-13. Camera ID 0 reported Camera2 hardware level 1 (`FULL`), active array
+4160 x 3120, and focal lengths 2.8, 7.0, and 15.0. With the 2.8 mm path and the
+center-half ROI 1040,780..3120,2340, AE reached state 2 (`CONVERGED`) at
+8,333,333 ns and sensitivity 100. The subsequent AF request over the same ROI
+reached state 4 (`FOCUSED_LOCKED`). The probe then closed the capture session
+and camera and reported `probe=PASS`. This proves that a separately installed
+Camera2 client can establish the missing AE/AF preview state. It does not yet
+prove that the locked physical lens position survives closing Camera2 and
+entering the separate `lcc` raw-capture path; that is the next transition gate.
+
+The factory masks for the two focal-length families asked about are:
+
+```text
+A1-A5: 3E 00 00
+C1-C6: 00 F8 01
+```
+
+The all-16 captures prove that every surface in either subset can be returned
+by one request, although these exact subset masks have not yet been exercised
+alone. A1, A3, A4, and A5 are Bayer color modules while A2 is panchromatic.
+C1-C5 are Bayer color modules while C6 is panchromatic; C1-C4 additionally
+have movable mirrors, whereas C5 and C6 use fixed geometry.
+
+Each Bayer module already contains all three color components after demosaicing;
+the modules do not each represent a different RGB channel. A useful fused image
+is nevertheless possible: normalize each sensor radiometrically, preserve its
+actual CFA layout, select/interpolate the per-focus calibration, compute the
+mirror-dependent extrinsics where applicable, estimate scene depth, warp every
+view to a reference camera with occlusion handling, and only then fuse color
+and detail. The panchromatic A2/C6 view can contribute luminance or structure,
+but cannot be treated as a missing RGB channel or multiplied into a Bayer view
+by one scene-independent factor because its spectral response differs.
+
+The A family is the sensible first reconstruction target: it has four color
+views, no moving mirrors, and a common nominal 28 mm focal length. A C-family
+fusion is possible in principle but requires the captured mirror Hall values
+and mirror calibration for four of its six views. A simple raw-pixel average
+would be physically wrong for either family because the modules have different
+viewpoints, CFA phases, distortion, and occlusions.
+
 ## Capture grammar and independently confirmed tuple
 
 Workflow 1 parses these six positional values after `-f 1`:
@@ -104,6 +253,33 @@ The relevant parameter options are `-e` for exposure, `-g` for gain, `-R` for
 resolution, and `-F` for frame rate. Each option accepts either one common
 value or one value per selected module. The capture parser also accepts an
 empty FPS list, so `-F` can be omitted; the recovered factory MIPI call does so.
+
+### Per-module exposure argument order
+
+The `-e` command-line case consumes consecutive decimal argv elements until it
+reaches the next option and stores them, without reordering, in the 16-element
+`uint64_t exposure.data` array. `wf_parse_capture()` accepts either zero/one
+common value or exactly `n_total_cam` values. A comma-separated list or one
+quoted argument containing spaces is therefore not equivalent to 16 values.
+
+`wf_run_capture()` serializes the multi-value array into CCB command `0x32`: the
+three-byte selected-module mask is followed by one little-endian eight-byte
+value after another. The matching module-attribute handler in the identified
+ASIC firmware traverses its module set through an iterator. Its initializer at
+`0x361c` scans upward until it finds the next set bit; its increment helper at
+`0x61c94` restarts that scan at the current bit plus one. The handler at
+`0x6898` advances the input pointer by eight bytes for every selected module
+when multiple values are present. The handler and iterator-initializer code
+bytes match in all three identified ASIC firmware images; the named increment
+helper was decompiled in the analyzed ASIC1 mapping.
+
+For mask `FE FF 01`, bits 1 through 16 are all set and already map to A1 through
+C6 in that order. Consequently, the first exposure argv element applies to A1,
+the second to A2, and so on through the sixteenth for C6. The later LRI surface
+order is grouped by ASIC and is unrelated to this command order. See
+[`single-shot-hdr.md`](single-shot-hdr.md) for the fixed first profile. Its
+first live LRI must still independently confirm all 16 exposure metadata
+values; static command ordering is not a substitute for sensor evidence.
 
 ### What `-C` actually does
 
@@ -156,7 +332,7 @@ to its timeout. Thus the fixed `lcc` command is statically expected to create
 an LRI automatically; no output option is needed. This is stronger than merely
 finding an `.lri` string, because the writer is reached from the capture-result
 callback and the factory workflow calls the exported start and close functions.
-Three bounded live runs have since produced files through exactly this path; see
+Multiple bounded live runs have since produced files through exactly this path; see
 the confirmed results below.
 
 ## Reference values from a normal A1 capture
@@ -237,23 +413,39 @@ writes camera sysfs, and has no execution option.
 
 The separately named [`device/a1_capture_once.sh`](../device/a1_capture_once.sh)
 is the enabled wrapper. Despite the historical filename, it contains exactly
-two fixed profiles selected only by the exact installed path:
+seven fixed profiles selected only by the exact installed path:
 
 | Installed path | Selection | Timeout | Minimum free space | Clean PASS |
 | --- | --- | ---: | ---: | --- |
 | `/data/local/tmp/light_l16_a1_capture_once.sh` | A1, `02 00 00` | 30 s | 256 MiB | may remain up |
+| `/data/local/tmp/light_l16_a1_center_af_capture_once.sh` | all-ASIC normal reset/readiness, A1 center AF, then A1 capture | 30 s per camera operation | 256 MiB | always reboot |
+| `/data/local/tmp/light_l16_a1_inline_af_capture_once.sh` | A1 center AF inside the open LCC HAL session, then A1 capture | 45 s | 256 MiB | always reboot |
+| `/data/local/tmp/light_l16_a1_async_capture_once.sh` | A1, `02 00 00`, reversible async shim | 30 s | 256 MiB | always reboot |
 | `/data/local/tmp/light_l16_all16_capture_once.sh` | all 16, `FE FF 01` | 60 s | 1 GiB | always reboot |
+| `/data/local/tmp/light_l16_all16_async_capture_once.sh` | all 16, `FE FF 01`, reversible async shim | 60 s | 1 GiB | always reboot |
+| `/data/local/tmp/light_l16_all16_hdr_async_capture_once.sh` | all 16, `FE FF 01`, fixed per-module 1.25/5/20 ms assignment, reversible async shim | 60 s | 1 GiB | always reboot |
 
-Both use `11 F1 00`, 4160 x 3120, 20,000,000 ns, gain 1.0, and one
-frame. Any other installed path is rejected. The payload is intentionally
-unsuitable for arbitrary commands or parameters. Before it can reach `lcc`,
-it requires all of the following:
+All seven use `11 F1 00`, 4160 x 3120, gain 1.0, and one capture frame. The first
+six use one common 20,000,000 ns value. The HDR profile supplies 16 fixed
+exposure arguments in A1-through-C6 bit order; it does not accept caller input.
+The center-AF profile first applies mask `02 00 00` and the fixed
+middle-50-percent ROI `1040,780,2080,1560`; no caller-supplied coordinate or
+module is accepted. Any other installed path is rejected. The payload is
+intentionally unsuitable for arbitrary commands or parameters. Before it can
+reach `lcc`, it requires all of the following:
 
 - the exact profile-specific one-use arming value
-  (`A1_CAPTURE_20000000NS_GAIN_1.0_ONCE` or
-  `ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE`), which it immediately deletes;
+  (`A1_CAPTURE_20000000NS_GAIN_1.0_ONCE`,
+  `A1_CENTER_AF_THEN_CAPTURE_20000000NS_GAIN_1.0_ONCE`,
+  `A1_INLINE_AF_CAPTURE_20000000NS_GAIN_1.0_ONCE`,
+  `A1_ASYNC_SHIM_CAPTURE_20000000NS_GAIN_1.0_ONCE`,
+  `ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE`,
+  `ALL16_ASYNC_SHIM_CAPTURE_20000000NS_GAIN_1.0_ONCE`, or
+  `ALL16_HDR_ASYNC_SHIM_CAPTURE_1250000_5000000_20000000NS_GAIN_1.0_ONCE`),
+  which it immediately deletes;
 - UID 0 through the self-clearing `fihop` runner and the exact known build,
-  kernel, SELinux, ASIC firmware, `lcc` identity, and camera-HAL identity;
+  kernel, SELinux, ASIC firmware, `lcc` identity, and camera-HAL identity; the
+  AF profile additionally requires the exact known `prog_app_p2` identity;
 - normal boot with `media` and `lightsvr` running, `ro.light.aos=1`, no special
   LCC mode, stopped `fwupgrade`, and no existing `lcc` process;
 - `manual_control=0`, no active CameraService client, UDP port 5000 unused, and
@@ -261,13 +453,26 @@ it requires all of the following:
 
 It then makes a fresh, hash-verified executable copy of `/system/etc/lcc` in a
 PID-specific root-owned directory and runs only the selected fixed profile
-through Toybox `timeout`: TERM after 30 seconds for A1 or 60 seconds for
-all 16, KILL after five more seconds. The still-running root supervisor
+through Toybox `timeout`: TERM after 30 seconds for the established A1
+operations, 45 seconds for inline A1 AF, or 60 seconds for an all-16 capture,
+KILL after five more seconds. The still-running root supervisor
 immediately writes `manual_control=0` again,
 checks that no `lcc` process or CameraService client remains, captures bounded
-before/after logs, and deletes the executable copy. It does not run
-`prog_app_p2`, reset an ASIC, start `fwupgrade`, touch a block device, or invoke
-raw focus, mirror, firmware, or calibration controls.
+before/after logs, and deletes the executable copy. The five non-AF profiles do
+not run `prog_app_p2`, reset an ASIC, start `fwupgrade`, touch a block device,
+or invoke mirror, firmware, or calibration controls. The center-AF profile is
+the sole exception: it makes a separate hash-verified copy
+of the exact 159,664-byte `prog_app_p2`, invokes only its non-flashing `-q`
+normal-reset branch, and requires the known read-only
+`lcc -m 0 -s 0 -r -p 12 34 15 02` response beginning with `01`. It then invokes
+factory workflow 0 once with its compiled-in A1 mask and ROI. Success requires
+the positive interrupt marker, incremented transaction ID, exactly one
+status-`0` response header, and a matching status-`0` transaction response
+file; `lcc` exit zero alone is insufficient. Its exit trap invokes only the
+same verified tool's `-F` ASIC power-off branch, rejects a surviving process or
+nonzero cleanup result, and still mandates a normal reboot. No profile starts
+`fwupgrade`, touches a block device, or invokes firmware, calibration, EEPROM,
+raw sensor-register, or mirror controls.
 
 Before invoking `lcc`, the wrapper snapshots existing HAL-generated
 `RDI_*.lri` paths without changing them. After `lcc` returns and immediate
@@ -277,12 +482,13 @@ the capture bundle and verifies the same size and SHA-1 locally. An absent or
 ambiguous new artifact prevents a `PASS` result.
 
 Because a timeout can kill `lcc` before its own `close_camera`, the fail-safe
-default after reaching `lcc` remains a normal reboot. Only the A1 profile may
-change that decision to `normal_reboot_required=no`, and only when `lcc`
+default after reaching `lcc` remains a normal reboot. Only the unmodified A1
+profile may change that decision to `normal_reboot_required=no`, and only when `lcc`
 returned zero, exactly one LRI was found, `manual_control=0`, no `lcc`
 process remains, CameraService is empty both immediately and after a settle
-interval, and `media` plus `lightsvr` are still running. The all-16 profile
-keeps `normal_reboot_required=yes` even on that clean path. The host
+interval, and `media` plus `lightsvr` are still running. All three all-16 profiles
+and the center-AF and experimental async A1 profiles keep
+`normal_reboot_required=yes` even on that clean path. The host
 additionally requires the complete diagnostic directory and a byte- and
 SHA-1-matching LRI before it honors either result. Every timeout, signal,
 failure, malformed result, or incomplete pull still requests `adb reboot`.
@@ -323,6 +529,15 @@ supervisor, whose deliberately long confirmation argument is required:
 host/run_a1_capture_once.sh --execute-fixed-a1-20ms-once-with-failure-reboot
 ```
 
+The center-AF profile is deliberately separate and always reboots after its
+response and diagnostic bundle have been pulled. A post-focus A1 image exists
+only when every AF response gate succeeds:
+
+```bash
+host/run_a1_capture_once.sh \
+  --execute-fixed-a1-center-af-then-20ms-capture-once-and-reboot
+```
+
 The explicit all-16 entry point has a separate confirmation and always reboots
 after pulling the attempted capture:
 
@@ -330,11 +545,53 @@ after pulling the attempted capture:
 host/run_all16_capture_once.sh --execute-fixed-all16-20ms-once-and-reboot
 ```
 
+The experimental A1 shim profile also has a separate confirmation, requires
+the already reviewed external ARM32 build by exact size and SHA-1, and always
+reboots. It does not replace or modify the installed HAL:
+
+```bash
+LIGHT_L16_ASYNC_SHIM=/absolute/path/liblcc_async_writer_shim.so \
+  host/run_a1_capture_once.sh \
+  --execute-fixed-a1-async-shim-20ms-once-and-reboot
+```
+
+The all-16 async profile uses the same reviewed library and retains the
+separate synchronous baseline profile:
+
+```bash
+LIGHT_L16_ASYNC_SHIM=/absolute/path/liblcc_async_writer_shim.so \
+  host/run_all16_capture_once.sh \
+  --execute-fixed-all16-async-shim-20ms-once-and-reboot
+```
+
+The fixed single-request HDR profile has its own local-only description mode.
+This does not touch ADB:
+
+```bash
+host/run_all16_hdr_capture_once.sh --describe
+```
+
+Its deliberately separate execution token submits the fixed A1-through-C6
+1.25/5/20 ms assignment through the reviewed async path and always reboots:
+
+```bash
+LIGHT_L16_ASYNC_SHIM=/absolute/path/liblcc_async_writer_shim.so \
+  host/run_all16_hdr_capture_once.sh \
+  --execute-fixed-all16-hdr-async-shim-1p25-5-20ms-once-and-reboot
+```
+
+This exact exposure profile has not yet run on a camera. The command above is a
+prepared first live test, not a confirmed result.
+
 The host side requires exactly one authorized ADB device and rejects it unless
 build, model, and product identifiers match the examined L16. It then pushes
 and hashes the payload, creates the one-use arm file, verifies all six `fihop`
 properties before triggering once, and polls for a completed result for at most
-90 seconds for A1 or 150 seconds for all 16. The examined Android build uses
+90 seconds for a non-AF A1 profile, 120 seconds for center AF plus capture, or
+150 seconds for all 16. The async profile
+additionally pushes the reviewed shim to `/data/local/tmp`, verifies its exact
+size and SHA-1 on the device, and requires all eleven runtime lifecycle markers
+before accepting `PASS`. The examined Android build uses
 the legacy ADB shell protocol and does not propagate remote command failures
 to the host, so completion is
 recognized only from an exact stdout marker produced after `final_status`
@@ -342,11 +599,15 @@ exists. The one-use arm value is likewise read back and compared before the
 trigger. Its exit trap clears all six properties; after a trigger may have been
 delivered it does not delete the remote arm or payload in the trap, because
 that could race a newly started wrapper. It pulls the result and diagnostic
-directory under `output/a1-capture-<UTC>/` or
-`output/all16-capture-<UTC>/`. A completed clean A1 result with the settled
+directory under `output/a1-capture-<UTC>/`,
+`output/a1-center-af-capture-<UTC>/`, `output/a1-async-capture-<UTC>/`,
+`output/all16-capture-<UTC>/`, or
+`output/all16-async-capture-<UTC>/`, or
+`output/all16-hdr-async-capture-<UTC>/`. A completed clean unmodified A1 result
+with the settled
 postconditions above remains up only after both the diagnostics and LRI were
-copied successfully. A completed all-16 result reboots after those copies have
-been verified. Otherwise an attempted or uncertain capture requests
+copied successfully. A completed async A1 or all-16 result reboots after those
+copies have been verified. Otherwise an attempted or uncertain capture requests
 `adb reboot`. A preflight failure before `lcc` does not cause an automatic
 reboot. The original HAL-generated LRI is deliberately left on the camera.
 
@@ -402,19 +663,142 @@ that the requested modules delivered valid pixels: the LRI's decoded module
 list, exposure metadata, dimensions, raw format, and sample statistics must be
 checked separately.
 
-## Confirmed device-side wrapper syntax
+## Same-session A1 focus gate
 
-The current 16,997-byte dual-profile payload was copied under its exact all-16
-path on the identified production L16 on 2026-08-09. Host and device both
-reported SHA-1:
+The fixed source
+[`shim/lcc_a1_focus_capture_shim.c`](../shim/lcc_a1_focus_capture_shim.c)
+implements the narrow missing transition without replacing Camera2 or the
+camera HAL. Static decompilation of the identified HAL shows that
+`LccInterface::openCamera()` configures two streams and starts its request
+thread. That thread immediately submits preview-template requests in a loop;
+`startCapture()` merely changes a flag so that a later request uses the special
+LCC output stream. The shim interposes that mangled `startCapture()` method,
+not the factory CLI parser.
+
+The ELF relocation table makes the narrower hook possible without replacing
+the HAL. Both
+`QCamera3HardwareInterface::processCaptureRequest(camera3_capture_request*)`
+and `LccInterface::processCaptureResult(camera3_capture_result const*)` have
+`R_ARM_JUMP_SLOT` entries. Disassembly of `prepareCaptureRequest(bool)` shows
+the frame number at request offset `0`, settings at offset `4`, and the normal
+Camera3 request layout; `processCaptureResult()` reads the output count and
+buffer pointer at offsets `8` and `12`, fixing the result metadata pointer at
+offset `4`. The static result trampoline calls the exported result method
+through its PLT entry as well.
+
+When the interposed `startCapture()` arms the gate, the next LCC preview request
+is copied and its metadata is cloned with spare capacity. The clone is updated
+and read back before use with the standard Android tags
+`CONTROL_AF_MODE=AUTO`,
+`CONTROL_AF_REGIONS=[1040,780,3120,2340,1000]`, and exactly one
+`CONTROL_AF_TRIGGER=START`. Subsequent preview and capture requests retain the
+same mode and ROI with `CONTROL_AF_TRIGGER=IDLE`; START is never repeated. The
+result hook ignores frames older than the recorded trigger frame and releases
+the real `startCapture()` only after an exact byte-valued
+`CONTROL_AF_STATE=FOCUSED_LOCKED`. `NOT_FOCUSED_LOCKED`, a five-second wait,
+invalid metadata, a HAL request error, or a duplicate start suppresses capture.
+The interposed `closeCamera()` then calls the HAL's direct `close()` path so the
+request thread and camera object are released without waiting for an image that
+was never requested.
+
+This revision issues no raw CCB/I2C AF command and consumes no transaction ID.
+The device wrapper requires each essential positive metadata marker exactly
+once, rejects every error/suppression marker, and still mandates a normal
+reboot. This first profile is deliberately A1-only; it does not yet claim that
+all 16 modules can autofocus together.
+
+The host-native mock covers both boundaries. It starts a real preview-request
+thread through the same interposed symbols, verifies the exact mode, ROI, one
+START and later IDLE values, and sends ACTIVE_SCAN followed by a terminal
+result. `FOCUSED_LOCKED` must reach the real start and normal close exactly
+once, while `NOT_FOCUSED_LOCKED` must reach neither and must use the direct
+cleanup path. This verifies hook ordering and fail-closed behavior, not
+physical focus or image sharpness.
+
+The first physical hostless run on 2026-08-16 stopped before loading the camera
+HAL. The constructor emitted only `loaded`, `preload_cleared`, and
+`real_bind_resolve_error`; Android 6's linker did not resolve the real `bind`
+through `RTLD_NEXT`. No AF request or capture release occurred, `lcc` was
+terminated by the bounded wrapper, and the recorded cleanup was settled.
+
+A second physical run resolved `bind` from Bionic `libc.so`, loaded the HAL,
+captured the response socket, and reached `startCapture()`. The 13-byte raw CCB
+AF write for A1 and the center ROI was accepted by the sysfs/I2C path, but LCC's
+ongoing preview results continued logging AF reset, full-frame ROI, focus type
+zero, and trigger zero. Roughly 6.5 seconds later the HAL reported a SOF freeze;
+the camera daemon stopped, `processCaptureRequest` returned `-19` for frame 116,
+and the raw response wait eventually timed out. The shim suppressed capture,
+the wrapper restored `manual_control=0`, removed the temporary process state,
+and the mandatory reboot returned the normal services. This is evidence of a
+control-path conflict, not a reason to lengthen the raw CCB timeout.
+
+The current metadata-interposition revision is the response to that result. It
+has passed the expanded native tests, APK hash-chain build, and one physical
+A1 capture on the identified L16. The resulting 16,566,521-byte LRI has SHA-1
+`0c1a2caf98ec8857fa4bdcb57c3a05c28a71b856`, parses without unknown fields,
+and records `focus_achieved=true`, center ROI `(0.5,0.5)`,
+`lens_position=11376`, disparity focus distance 1691 mm, contrast focus
+distance 2439.4873 mm, and `lens_timeout=false`. The two preceding transition
+captures recorded `focus_achieved=false`, zero ROI, zero focus distances, and
+`lens_position=0`. This proves that the same-session gate physically moved A1
+and preserved the resulting position into the RAW capture. The scene itself
+was severely underexposed (RAW median 43 at black level 42), so it is not a
+controlled optical-resolution comparison.
+
+The hostless [`android/a1-capture`](../android/a1-capture/README.md) APK now
+builds this ARM32 preload into a temporary asset at APK build time, pins it in
+the app and root supervisor, and selects only this inline-AF child path. A host
+is therefore required for installation, but not for the later two-tap capture.
+This packages the same physically exercised gate. The new separate
+[`android/a-group-capture`](../android/a-group-capture/README.md) app applies it
+to the fixed `A1-A5` mask as the next still-unverified multi-module step.
+
+## Device-side wrapper syntax
+
+The current 44,185-byte eight-profile payload has host SHA-1:
 
 ```text
-9162065d787c866096ff064e0c28495d7a29aef5
+d1aa05a77de4c8a45296edbaadf3753aa66cc840
 ```
 
-The device's `/system/bin/sh -n` returned zero and the syntax-only copy was
-removed before capture. This exact payload then completed the 20 ms all-16 live
-run documented below.
+Its host shell syntax check and automated tests pass. The eighth profile is the
+fixed `A1-A5` same-session AF request described above. Its first physical LRI
+has been decoded successfully: exactly A1-A5, one shared image ID/timestamp,
+`focus_achieved=true` in both capture blocks, five nonzero lens positions, and
+no lens timeout. Its matching supervisor TXT also verifies the expected payload
+and shim hashes, focused-lock result, zero LCC exit, complete cleanup, settled
+services and camera clients, identical LRI size/SHA-1, and intended normal
+reboot. The seventh profile's exact per-module HDR exposure
+assignment also remains unexecuted. The preceding 43,160-byte seven-profile
+payload with SHA-1 `293c6f246728ccc457b7ce2f5bb4fdedbc6db8f5`
+completed the physical A1 inline-AF capture. The preceding 43,655-byte payload
+used the failed raw-CCB same-session approach. The preceding 38,779-byte six-profile
+payload had SHA-1 `bb20f8989cc99c4c9bc93b355bc6dabd7596a9d5`. The preceding
+36,730-byte five-profile payload had SHA-1
+`22d9d184dbf7e7026af047a0ff447cf7dd67a965`; a syntax-only device copy passed
+`/system/bin/sh -n`, matched the host, and was removed without arming or
+invoking any camera operation. The preceding live-tested 35,706-byte payload had SHA-1
+`75acc3355dc9027363557046cdc007dd7bff0e31`; its device copy passed the same
+syntax and identity checks before the second bounded center-AF attempt. The
+preceding 28,338-byte five-profile payload had SHA-1
+`050d9fec5d21f82b5feabf494f72e448bc2a01f1`; host and device syntax checks
+passed and the device copy matched before the first bounded center-AF attempt
+documented below. The preceding 21,310-byte four-profile payload had SHA-1
+`d6f6a4e683272a5c4fa26404240a297d320dc4b3`; both the host syntax check and the
+device's `/system/bin/sh -n` returned zero before it completed the fixed all-16
+async run documented below. The preceding 20,598-byte three-profile
+payload had SHA-1
+`105ba4152f0c8c161d48e63ddda7dd87db8a1a3a`; host and device syntax checks
+passed before it completed the fixed async A1 run documented below. The
+previous 16,998-byte dual-profile payload had SHA-1
+`6dd00e850a558ff6ae8fcbfe8896f95022988f9e`; host and device hashes matched,
+the device's `/system/bin/sh -n` returned zero, and the syntax-only copy was
+removed before that payload completed the fixed A1 live run documented below.
+It differs from the exact 16,997-byte
+payload used for the 20 ms all-16 live run only by increasing the A1 profile's
+bounded diagnostic tail from 500 to 2,000 lines. That preceding payload had
+SHA-1 `9162065d787c866096ff064e0c28495d7a29aef5` and also passed the device
+syntax check before its capture.
 
 For history, the preceding 15,481-byte A1-only payload had SHA-1
 `a8270d08d19aa44c5511117c9646a10cb763f823` and completed the 20 ms A1
@@ -449,6 +833,80 @@ fault. The updated supervisor uses an exact `COMPLETE`/`PENDING` stdout marker,
 verifies the arm file contents before triggering, and has a regression test in
 which the first two remote polls are pending while legacy ADB reports success.
 No successful live attempt is represented by this subsection.
+
+## First bounded center-AF attempt: request rejected before actuation
+
+On 2026-08-10, a separate 20 ms A1 capture first completed normally and was
+retained as the before-AF reference under
+`output/a1-capture-20260810T155527Z/`. Its 16,566,521-byte LRI has SHA-1
+`31bb537d2f26911b70a648e435bcb3b1f292f026`.
+
+The then-current center-AF profile was subsequently armed once. All preflight
+gates passed, including no active CameraService client, `manual_control=0`, and
+the expected binary identities. `lcc` constructed the fixed A1/center-ROI
+request, but its output was:
+
+```text
+Received length -1 does not match expected length 8
+Don't recieve interrupt signal
+```
+
+The corresponding kernel delta proves the earlier failure point:
+
+```text
+asic_i2c_write_store: block_addr = 0x0038
+i2c-msm-v2 75b9000.i2c: NACK: slave not responding, ensure its powered
+asic_i2c_write_store:2127 I2C block write failed
+```
+
+The wrapper correctly treated `lcc`'s misleading zero exit status as failure,
+recorded `autofocus_attempted=yes`, left `capture_attempted=no`, restored
+`manual_control=0`, found no surviving `lcc` or camera client, and requested a
+normal reboot. The evidence bundle is
+`output/a1-center-af-capture-20260810T155743Z/`. After reconnect, the camera
+reported completed normal boot, ASIC firmware `0076D11B`, running `media` and
+`lightsvr`, no active camera client, and `manual_control=0x0`.
+
+This result invalidates the old idle-boot assumption but does not invalidate
+workflow 0 or A1 focus control. Static analysis of the recovered factory test
+sequence led to the revised, gated normal-reset/readiness path described above.
+That revised path subsequently passed host tests, device syntax/hash
+verification, and the explicitly acknowledged all-ASIC reset boundary before
+the second bounded run described below.
+
+## Second bounded center-AF attempt: transport fixed, AF state still missing
+
+The revised profile was armed once on 2026-08-10. The exact 159,664-byte
+`prog_app_p2` copy matched SHA-1
+`d6d74641759f2e208beac4318507ea1b71923db4`; its non-flashing `-q` branch
+returned zero, and the stock readiness request returned `01 00`. The AF command
+then emitted transaction `0x0039` with the fixed A1 mask `02 00 00` and center
+ROI `1040,780,2080,1560`. Unlike the first attempt, the kernel logged the full
+13-byte write and no NACK or I2C failure:
+
+```text
+asic_i2c_write_store: block_addr = 0x0039
+asic_i2c_write_store, write_data : 0x5A 0x80 0x02 0x00 0x00 ...
+```
+
+No response interrupt or status header arrived during the internal 20-second
+wait. The wrapper rejected `lcc`'s zero process status, recorded
+`failure=autofocus_interrupt_not_received_once`, and did not issue a capture.
+Its historical result also retained `autofocus_response=not_run`; that was a
+diagnostic-label defect, not evidence that AF was skipped. The current wrapper
+sets `autofocus_response=interrupt_not_received` for this exact marker pair.
+Its fixed `prog_app_p2 -F` cleanup returned zero, no `lcc` or `prog_app_p2`
+process remained, and the host requested a normal reboot. The evidence bundle
+is `output/a1-center-af-capture-20260810T161912Z/`.
+
+After reboot, the identified production camera reported
+`sys.boot_completed=1`, ASIC firmware `0076D11B`, `manual_control=0x0`, running
+`media` and `lightsvr`, cleared `persist.sys.fihop*` arguments, no test process,
+and no active CameraService client. This second result proves that the factory
+reset/readiness sequence removes the I2C transport failure. It does not prove
+lens motion or working direct autofocus. Because CameraService was closed and
+`wf_run_auto_focus()` itself has no camera-HAL open path, an active
+sensor/preview pipeline is now the leading missing precondition.
 
 ## Confirmed dry-run result
 
@@ -593,9 +1051,12 @@ inventing calibration:
   calibration measurement.
 
 The new diagnostics are not clean enough to call this an unqualified
-control-path pass. Unlike either A1 run, the bounded all-16 log contains 19
-`RDI SOF` timeout messages, 49 failures to obtain a metadata buffer paired
-with 49 failures to issue SOF to all modules, and two buffer-unmap failures.
+control-path pass. The bounded all-16 log contains 19 `RDI SOF` timeout
+messages, 49 failures to obtain a metadata buffer paired with 49 failures to
+issue SOF to all modules, and two buffer-unmap failures. The two earlier A1
+bundles cannot establish whether those diagnostics were absent: each retained
+only 501 logcat lines, beginning 1.14--1.18 seconds after the timestamp encoded
+in its generated LRI filename and therefore after the transfer/write window.
 The capture nevertheless logs `All transfers done` immediately after the
 last RDI timeout, writes the LRI, returns zero, stops session 2 successfully,
 and closes camera ID 0 with `rc: 0`. There is no MIPI RX error, kernel fault,
@@ -614,3 +1075,146 @@ ID 0 after boot; that new application client was not a surviving `lcc`
 session. A second check at uptime 854.19 seconds found CameraService empty
 again while both services, the zero manual gate, and all runner properties
 remained clean.
+
+## Full-window A1 comparison
+
+The 2,000-line A1 profile was then run once on 2026-08-09. The retained bundle
+is `output/a1-capture-20260809T201503Z/`. The wrapper returned `PASS` without a
+reboot and copied one 16,566,521-byte LRI with matching device/host SHA-1
+`6420a3596bffdd211a82bae6e3cd2262792800fd`. Schema decoding found eight
+complete blocks with no unknown field or unused message bytes. The only fired
+module was A1: 4160 x 3120 packed RAW10, 19,999,956 ns exposure, and analog and
+digital gain 1.0.
+
+The lossless raw decode and complete radiometric normalization also succeeded.
+No sample was saturated. The initial 21,684-pixel defect mask grew to 48,090
+pixels after the documented crosstalk-mask propagation, or 0.371% of the
+surface; normalization emitted no calibration warning for A1.
+
+The full capture window contains two `RDI SOF` timeout messages and the same
+single synthetic-buffer unmap failure propagated through MCT, the pipeline,
+and the HAL. It contains zero `mct_stream_get_metadata_buffer` failures and
+zero paired `Failed to issue SOF cmd to all modules` messages. The A1 writer
+logged three FDs totalling 16,566,521 bytes; its last FD appeared 96 ms after
+`writeFile()` began, and normal metadata processing was visible two
+milliseconds later. In the all-16 run, the equivalent 20-FD, 259,999,993-byte
+write occupied about 1.144 seconds and its first metadata-buffer failure began
+318 ms after `writeFile()` entered. This controlled size comparison supports
+the decompiled call-path diagnosis: synchronous storage I/O blocks the result
+callback long enough to exhaust the metadata pool only for the large all-16
+artifact. It also shows that the unmap bookkeeping fault and RDI timeout
+recovery are independent of that exhaustion.
+
+The public analyzer remains deliberately fail-closed and therefore reports
+`CONTROL_PATH_FAILED`; that verdict records the real timeout/unmap diagnostics
+and is separate from the valid LRI framing and decoded pixels. The final live
+health check, without another trigger or reboot, found completed boot, running
+`media` and `lightsvr`, stopped `fwupgrade` and `fihop`, `manual_control=0`, no
+`lcc` process, neutral runner properties, and an empty CameraService client
+list.
+
+The reconstructed buffer lifetime, the reason that smaller synchronous writes
+would still block this callback, and an ownership-safe asynchronous patch
+contract are documented in
+[`async-lri-writer.md`](async-lri-writer.md). Its Python implementation remains
+a host-only state-machine model. The narrower reversible preload integration
+probe has now been exercised on the identified device; it is neither a modified
+installed HAL nor the general producer-lease implementation specified there.
+
+## Reversible asynchronous A1 integration result
+
+The final bounded async A1 run completed on 2026-08-09 and is retained under
+`output/a1-async-capture-20260809T220728Z/`. The wrapper returned `PASS`, `lcc`
+returned zero, exactly one 16,566,521-byte LRI was copied with matching
+device/host SHA-1 `008dc190d2a9a1e38615bcb5a73d4e342a1de3f8`, and every expected shim marker
+occurred exactly once. Those markers prove target resolution, a filtered-child
+preload self-test, one enqueue and worker, writer completion before the original
+close path continued, seven successful factory helper commands, and clean
+reporting. The current `lcc` output contains no 32/64-bit loader warning or
+repeated interposition marker.
+
+Schema decoding found eight complete blocks with no unknown fields or unused
+message bytes. The only fired module was A1: packed RAW10 at 4160 x 3120,
+19,999,956 ns exposure, and analog and digital gain 1.0. Complete radiometric
+normalization used those exact values, emitted no warning, found no saturated
+sample, and propagated the 21,684-pixel calibration defect mask to 48,090 pixels
+after crosstalk correction (0.371% of the surface). The low-light result had an
+SNR median of 2.1 and p10 of 0.3.
+
+The conservative analyzer still reports `CONTROL_PATH_FAILED`: this A1 window
+contains two `RDI SOF` timeouts and one buffer-unmap chain, matching the
+independent diagnostics seen in the full-window unmodified A1 comparison. It
+contains no metadata-pool failure, no paired `Failed to issue SOF cmd to all
+modules` message, and none of the earlier preload/helper failures during the
+00:07 capture interval. The retained logcat crash ring still includes one
+`page record` line timestamped 23:58:50 from earlier loader testing; it predates
+this LRI by more than eight minutes and is not present in the current `lcc`
+stream. This is a successful fixed-profile integration and artifact result,
+not an unqualified camera control-path pass.
+
+The host removed the payload, arm file, and preload library, then requested the
+profile's mandatory normal reboot. The post-boot check found build
+`00WW_1_351`, completed boot, running `media` and `lightsvr`, stopped
+`fwupgrade`, `manual_control=0`, neutral runner properties, no `lcc` process,
+and no active CameraService client. No system or vendor partition file was
+changed.
+
+## Reversible asynchronous all-16 result
+
+The bounded all-16 async run completed on 2026-08-10 and is retained under
+`output/all16-async-capture-20260810T145618Z/`. The wrapper and all eleven shim
+lifecycle gates returned `PASS`, `lcc` returned zero, and exactly one
+259,999,993-byte LRI was copied with matching device/host SHA-1
+`9fb56c01ad11cb3507bb091c89866f51e3fa0295` and local SHA-256
+`05f97264fa505fab7c488ebc0f9ada1d73010e42d45ed0d8c771317d37dc6052`.
+The current `lcc` output contains no preload, helper, worker, or close error.
+
+Schema decoding found ten complete blocks with no unknown fields or unused
+message bytes. All 16 expected RAW10 surfaces are present at 4160 x 3120; every
+module records 19,999,956 ns exposure and analog/digital gain 1.0. The three
+capture headers retain a common image ID and timestamp grouping. Complete
+radiometric normalization processed all approximately 208 million samples and
+found no saturated pixel.
+
+A 2112 x 1732 contact sheet of all 16 normalized surfaces is retained as
+`pixels/all16-async-normalized-per-module-stretch.png` (SHA-256
+`4f4a804dabacc5d3c4862addb1718512b4df32a5ed20444cfcd288bf6a99e116`). Each
+tile uses its own 0.5--99.5 percentile display stretch followed by a square-root
+display curve, so it is useful for framing and focus inspection but deliberately
+not a module-brightness or color comparison. Several B/C views are visibly soft
+and C6 shows the strongest defocus/bokeh. This capture did not run autofocus:
+the LRI reports `focus_achieved=false`, zero disparity and contrast focus
+distances, and `LEGACY_UNKNOWN` as the AF trigger. Several stored lens positions
+are also zero, while A5 is negative. The sheet is therefore a useful before-AF
+baseline, not evidence that a lens or mirror actuator failed.
+
+The controlled log comparison is the important result:
+
+| Diagnostic | Synchronous all 16 | Async all 16 |
+| --- | ---: | ---: |
+| `mct_stream_get_metadata_buffer` failures | 49 | 0 |
+| `Failed to issue SOF cmd to all modules` | 49 | 0 |
+| `RDI SOF` timeouts | 19 | 19 |
+| unmap-chain messages | 2 | 2 |
+
+Moving the 260 MB write off the result callback therefore eliminates the two
+metadata-exhaustion series while leaving the independent timeout and synthetic
+buffer-unmap behavior unchanged. This is strong device confirmation of the
+callback-stall diagnosis, not a complete control-path fix; the conservative
+analyzer correctly continues to report `CONTROL_PATH_FAILED` for the remaining
+errors.
+
+Normalization identifies A2 and C6 as panchromatic and the other 14 modules as
+Bayer color. It warns that A2/C6 lack sensor-type-specific black/white metadata,
+which can only be resolved with a controlled dark frame. B3 and C3 also required
+vignetting-grid clamping because their captured mirror Hall values (518 and
+386) lay just outside the available approximately 520 and 388 support points.
+These are calibration boundaries, not malformed pixel data.
+
+The host removed the payload, arm file, and preload library before requesting
+the mandatory reboot. Post-boot checks found the expected build, completed boot,
+running `media` and `lightsvr`, stopped `fwupgrade`, `manual_control=0`, neutral
+runner properties, and no `lcc` process. The only CameraService client observed
+immediately afterward was the normal stock package `light.co.lightcamera`, not
+a surviving factory session; a later check found no active client. No installed
+HAL or partition was modified.

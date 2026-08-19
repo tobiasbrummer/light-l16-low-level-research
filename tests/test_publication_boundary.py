@@ -87,7 +87,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
 
     control_doc = (ROOT / "docs" / "lcc-control.md").read_text(encoding="utf-8")
     assert (
-        f"current {len(payload.read_bytes()):,}-byte dual-profile payload"
+        f"current {len(payload.read_bytes()):,}-byte eight-profile payload"
         in control_doc
     )
     assert hashlib.sha1(payload.read_bytes()).hexdigest() in control_doc
@@ -99,35 +99,177 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert text.index(armed) < text.index(attempted)
     assert 'rm -f "$ARM_FILE"' in text
     assert "/data/local/tmp/light_l16_a1_capture_once.sh" in text
+    assert "/data/local/tmp/light_l16_a1_center_af_capture_once.sh" in text
+    assert "/data/local/tmp/light_l16_a1_inline_af_capture_once.sh" in text
+    assert "/data/local/tmp/light_l16_a_group_inline_af_capture_once.sh" in text
+    assert "/data/local/tmp/light_l16_a1_async_capture_once.sh" in text
     assert "/data/local/tmp/light_l16_all16_capture_once.sh" in text
+    assert "/data/local/tmp/light_l16_all16_async_capture_once.sh" in text
+    assert "/data/local/tmp/light_l16_all16_hdr_async_capture_once.sh" in text
+
+    def profile_block(path: str) -> str:
+        start = text.index(f"    {path})")
+        end = text.index("        ;;", start)
+        return text[start:end]
+
+    a1_profile = profile_block("/data/local/tmp/light_l16_a1_capture_once.sh")
+    a1_center_af_profile = profile_block(
+        "/data/local/tmp/light_l16_a1_center_af_capture_once.sh"
+    )
+    a1_async_profile = profile_block(
+        "/data/local/tmp/light_l16_a1_async_capture_once.sh"
+    )
+    a1_inline_af_profile = profile_block(
+        "/data/local/tmp/light_l16_a1_inline_af_capture_once.sh"
+    )
+    a_group_inline_af_profile = profile_block(
+        "/data/local/tmp/light_l16_a_group_inline_af_capture_once.sh"
+    )
+    all16_profile = profile_block(
+        "/data/local/tmp/light_l16_all16_capture_once.sh"
+    )
+    all16_async_profile = profile_block(
+        "/data/local/tmp/light_l16_all16_async_capture_once.sh"
+    )
+    all16_hdr_async_profile = profile_block(
+        "/data/local/tmp/light_l16_all16_hdr_async_capture_once.sh"
+    )
+    for profile in (a1_profile, a1_center_af_profile, a1_async_profile):
+        assert "MASK0=02\n        MASK1=00\n        MASK2=00" in profile
+        assert "CAPTURE_TIMEOUT_SECONDS=30" in profile
+        assert "MIN_DATA_FREE_KB=262144" in profile
+    assert "MASK0=02\n        MASK1=00\n        MASK2=00" in a1_inline_af_profile
+    assert "CAPTURE_TIMEOUT_SECONDS=45" in a1_inline_af_profile
+    assert "MIN_DATA_FREE_KB=262144" in a1_inline_af_profile
+    assert "USE_A1_AF_SHIM=yes" in a1_inline_af_profile
+    assert "MASK0=3E\n        MASK1=00\n        MASK2=00" in a_group_inline_af_profile
+    assert "CAPTURE_TIMEOUT_SECONDS=60" in a_group_inline_af_profile
+    assert "MIN_DATA_FREE_KB=524288" in a_group_inline_af_profile
+    assert "ALLOW_CLEAN_NO_REBOOT=no" in a_group_inline_af_profile
+    assert "USE_A1_AF_SHIM=yes" in a_group_inline_af_profile
+    for profile in (all16_profile, all16_async_profile, all16_hdr_async_profile):
+        assert "MASK0=FE\n        MASK1=FF\n        MASK2=01" in profile
+        assert "CAPTURE_TIMEOUT_SECONDS=60" in profile
+        assert "MIN_DATA_FREE_KB=1048576" in profile
+        assert "ALLOW_CLEAN_NO_REBOOT=no" in profile
+    assert "USE_ASYNC_SHIM=no" in a1_profile
+    assert "RUN_AUTOFOCUS=yes" in a1_center_af_profile
+    assert "RUN_FACTORY_ASIC_RESET=yes" in a1_center_af_profile
+    assert "AUTOFOCUS_X=1040" in text
+    assert "AUTOFOCUS_Y=780" in text
+    assert "AUTOFOCUS_WIDTH=2080" in text
+    assert "AUTOFOCUS_HEIGHT=1560" in text
+    assert '"$LCC_COPY" -m 0 -s 0 -V -C -H -f 0' in text
+    assert "autofocus_interrupt_not_received_once" in text
+    assert "AUTOFOCUS_RESPONSE=interrupt_not_received" in text
+    assert "autofocus_response_path_already_exists" in text
+    assert "USE_ASYNC_SHIM=yes" in a1_async_profile
+    assert "USE_ASYNC_SHIM=no" in all16_profile
+    assert "USE_ASYNC_SHIM=yes" in all16_async_profile
+    assert "USE_ASYNC_SHIM=yes" in all16_hdr_async_profile
+    assert "EXPOSURE_COUNT=16" in all16_hdr_async_profile
+    assert (
+        "EXPOSURE_ARGS='1250000 20000000 5000000 5000000 20000000 "
+        "20000000 5000000 5000000 1250000 20000000 20000000 5000000 "
+        "5000000 20000000 1250000 20000000'" in all16_hdr_async_profile
+    )
+    assert (
+        "EXPOSURE_ORDER=A1,A2,A3,A4,A5,B1,B2,B3,B4,B5,C1,C2,C3,C4,C5,C6"
+        in all16_hdr_async_profile
+    )
+
     assert "ARM_VALUE=A1_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    assert (
+        "ARM_VALUE=A1_CENTER_AF_THEN_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    )
+    assert (
+        "ARM_VALUE=A1_ASYNC_SHIM_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    )
+    assert "ARM_VALUE=A1_INLINE_AF_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    assert (
+        "ARM_VALUE=A_GROUP_INLINE_AF_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    )
     assert "ARM_VALUE=ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    assert (
+        "ARM_VALUE=ALL16_ASYNC_SHIM_CAPTURE_20000000NS_GAIN_1.0_ONCE" in text
+    )
+    assert (
+        "ARM_VALUE=ALL16_HDR_ASYNC_SHIM_CAPTURE_1250000_5000000_20000000NS_"
+        "GAIN_1.0_ONCE" in text
+    )
     assert "MODE=A1_FIXED_CAPTURE_20MS_ONCE" in text
+    assert "MODE=A1_CENTER_AF_THEN_FIXED_CAPTURE_20MS_ONCE" in text
+    assert "MODE=A1_ASYNC_SHIM_FIXED_CAPTURE_20MS_ONCE" in text
+    assert "MODE=A1_INLINE_CENTER_AF_FIXED_CAPTURE_20MS_ONCE" in text
+    assert "MODE=A_GROUP_INLINE_CENTER_AF_FIXED_CAPTURE_20MS_ONCE" in text
     assert "MODE=ALL16_FIXED_CAPTURE_20MS_ONCE" in text
+    assert "MODE=ALL16_ASYNC_SHIM_FIXED_CAPTURE_20MS_ONCE" in text
+    assert "MODE=ALL16_HDR_ASYNC_SHIM_SINGLE_REQUEST_1P25_5_20MS_ONCE" in text
     assert "MASK0=02\n        MASK1=00\n        MASK2=00" in text
     assert "MASK0=FE\n        MASK1=FF\n        MASK2=01" in text
-    assert "EXPOSURE_NS=20000000" in text
+    assert "EXPOSURE_COUNT=1" in text
+    assert "EXPOSURE_ARGS=20000000" in text
+    assert "EXPOSURE_ORDER=common_for_selected_modules" in text
+    assert "EXPOSURE_PLAN=selected:20000000" in text
     assert "GAIN=1.0" in text
     assert "TUPLE0=11\nTUPLE1=F1\nTUPLE2=00" in text
     assert "CAPTURE_TIMEOUT_SECONDS=30" in text
     assert "CAPTURE_TIMEOUT_SECONDS=60" in text
     assert "MIN_DATA_FREE_KB=262144" in text
     assert "MIN_DATA_FREE_KB=1048576" in text
+    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 8
+    assert "DIAGNOSTIC_LOG_LINES=500" not in text
     assert "ALLOW_CLEAN_NO_REBOOT=yes" in text
     assert "ALLOW_CLEAN_NO_REBOOT=no" in text
-    assert (
-        '/system/bin/timeout -k 5s "${CAPTURE_TIMEOUT_SECONDS}s" "$LCC_COPY"'
-        in text
+    assert '/system/bin/timeout -k 5s "${CAPTURE_TIMEOUT_SECONDS}s"' in text
+    assert 'set -- -m 0 -s 0 -f 1 "$MASK0" "$MASK1" "$MASK2"' in text
+    assert '"$TUPLE0" "$TUPLE1" "$TUPLE2" -R 4160,3120 -e' in text
+    assert 'set -- "$@" "$EXPOSURE_VALUE"' in text
+    assert 'set -- "$@" -g "$GAIN"' in text
+    assert '"$LCC_COPY" "$@"' in text
+    assert "a comma-separated or" in text
+    capture_plan = next(
+        line
+        for line in text.splitlines()
+        if "printf 'executed_argv=<verified-lcc-copy>" in line
     )
-    assert '-m 0 -s 0 -f 1 "$MASK0" "$MASK1" "$MASK2"' in text
-    assert '-R 4160,3120 -e "$EXPOSURE_NS" -g "$GAIN"' in text
-    assert " -F " not in text
-    assert " -C " not in text
+    assert " -C " not in capture_plan
+    assert " -F " not in capture_plan
+    assert (
+        "autofocus_executed_argv=<verified-lcc-copy> "
+        "-m 0 -s 0 -V -C -H -f 0" in text
+    )
+    assert "PROG_APP_SOURCE=/system/etc/prog_app_p2" in text
+    assert "EXPECTED_PROG_APP_SIZE=159664" in text
+    assert "EXPECTED_PROG_APP_SHA1=d6d74641759f2e208beac4318507ea1b71923db4" in text
+    assert "asic_reset_executed_argv=<verified-prog-app-copy> -q" in text
+    assert '"$PROG_APP_COPY" -F' in text
+    assert "asic_reset_scope=all_three_asics_normal_mode_nonflashing" in text
+    assert "-m 0 -s 0 -r -p 12 34 15 02" in text
+    assert "autofocus_response_status_nonzero" in text
+    assert "autofocus_response_file_status_nonzero" in text
     assert "lcc_response_files=disabled" in text
     assert "hal_lri_output=expected_automatically" in text
     assert "HAL_SOURCE=/system/lib/hw/camera.msm8996.so" in text
     assert "EXPECTED_HAL_SIZE=1338100" in text
     assert "EXPECTED_HAL_SHA1=016602174e0635e79cda5566d5e850c1294a9300" in text
+    assert "EXPECTED_SHIM_SIZE=8904" in text
+    assert "EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8" in text
+    assert "LD_PRELOAD=$1; export LD_PRELOAD; shift; exec \"$@\"" in text
+    for marker in (
+        "loaded",
+        "preload_cleared",
+        "resolve_targets_ok",
+        "preload_child_selftest_ok",
+        "enqueue_ok",
+        "worker_start",
+        "worker_done_ok",
+        "close_wait",
+        "close_continue",
+        "helper_commands_ok",
+        "close_reports_ok",
+    ):
+        assert marker in text
     assert "LRI_DIR=/sdcard/DCIM/camera" in text
     assert 'snapshot_lri_paths "$WORKDIR/lri.before.txt"' in text
     assert 'snapshot_lri_paths "$WORKDIR/lri.after.txt"' in text
@@ -139,7 +281,6 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert 'rm -f "$LCC_COPY"' in text
     for forbidden in (
         "/dev/block",
-        "prog_app_p2",
         "start fwupgrade",
         "camera_enable",
         "eeprom",
@@ -157,6 +298,44 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
     shell = shutil.which("sh")
     assert shell is not None
     subprocess.run([shell, "-n", str(supervisor)], check=True)
+    supervisor_text = supervisor.read_text(encoding="utf-8")
+    assert (
+        "--execute-fixed-a1-center-af-then-20ms-capture-once-and-reboot"
+        in supervisor_text
+    )
+    assert (
+        "--execute-fixed-a1-inline-af-then-20ms-capture-once-and-reboot"
+        in supervisor_text
+    )
+    assert "EXPECTED_MODE=A1_CENTER_AF_THEN_FIXED_CAPTURE_20MS_ONCE" in supervisor_text
+    assert "EXPECTED_MODE=A1_INLINE_CENTER_AF_FIXED_CAPTURE_20MS_ONCE" in supervisor_text
+    assert "--execute-fixed-a1-async-shim-20ms-once-and-reboot" in supervisor_text
+    assert "--execute-fixed-all16-async-shim-20ms-once-and-reboot" in supervisor_text
+    assert "EXPECTED_MODE=A1_ASYNC_SHIM_FIXED_CAPTURE_20MS_ONCE" in supervisor_text
+    assert "EXPECTED_MODE=ALL16_ASYNC_SHIM_FIXED_CAPTURE_20MS_ONCE" in supervisor_text
+    assert (
+        "--execute-fixed-all16-hdr-async-shim-1p25-5-20ms-once-and-reboot"
+        in supervisor_text
+    )
+    assert (
+        "EXPECTED_MODE=ALL16_HDR_ASYNC_SHIM_SINGLE_REQUEST_1P25_5_20MS_ONCE"
+        in supervisor_text
+    )
+    assert "completed result has unexpected exposure manifest" in supervisor_text
+    assert "PASS_REBOOT_REQUIRED=yes" in supervisor_text
+    assert "LIGHT_L16_ASYNC_SHIM" in supervisor_text
+    assert "LIGHT_L16_A1_AF_SHIM" in supervisor_text
+    assert "EXPECTED_SHIM_SIZE=8904" in supervisor_text
+    assert (
+        "EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8"
+        in supervisor_text
+    )
+    assert "async PASS lacks verified shim runtime markers" in supervisor_text
+    assert "inline-AF PASS lacks a focused-locked same-session result" in supervisor_text
+    assert (
+        "center-AF PASS lacks verified reset, readiness, status-zero response, "
+        "or power-off" in supervisor_text
+    )
 
     without_confirmation = subprocess.run(
         [shell, str(supervisor)], capture_output=True, text=True
@@ -199,18 +378,49 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
                 }.get(name, "")
 
             profile = os.environ.get("FAKE_PROFILE", "a1")
-            if profile == "all16":
+            if profile == "all16-hdr-async":
+                mode = "ALL16_HDR_ASYNC_SHIM_SINGLE_REQUEST_1P25_5_20MS_ONCE"
+                workdir = "/data/local/tmp/light_l16_all16_hdr_async_capture_run.1234"
+                arm_value = "ALL16_HDR_ASYNC_SHIM_CAPTURE_1250000_5000000_20000000NS_GAIN_1.0_ONCE"
+                exposure_count = "16"
+                exposure_order = "A1,A2,A3,A4,A5,B1,B2,B3,B4,B5,C1,C2,C3,C4,C5,C6"
+                exposure_plan = "A1:1250000,A2:20000000,A3:5000000,A4:5000000,A5:20000000,B1:20000000,B2:5000000,B3:5000000,B4:1250000,B5:20000000,C1:20000000,C2:5000000,C3:5000000,C4:20000000,C5:1250000,C6:20000000"
+                async_shim = "verified"
+            elif profile == "all16":
                 mode = "ALL16_FIXED_CAPTURE_20MS_ONCE"
                 workdir = "/data/local/tmp/light_l16_all16_capture_run.1234"
                 arm_value = "ALL16_CAPTURE_20000000NS_GAIN_1.0_ONCE"
+            elif profile == "a1-center-af":
+                mode = "A1_CENTER_AF_THEN_FIXED_CAPTURE_20MS_ONCE"
+                workdir = "/data/local/tmp/light_l16_a1_center_af_capture_run.1234"
+                arm_value = "A1_CENTER_AF_THEN_CAPTURE_20000000NS_GAIN_1.0_ONCE"
+            elif profile == "a1-inline-af":
+                mode = "A1_INLINE_CENTER_AF_FIXED_CAPTURE_20MS_ONCE"
+                workdir = "/data/local/tmp/light_l16_a1_inline_af_capture_run.1234"
+                arm_value = "A1_INLINE_AF_CAPTURE_20000000NS_GAIN_1.0_ONCE"
             else:
                 mode = "A1_FIXED_CAPTURE_20MS_ONCE"
                 workdir = "/data/local/tmp/light_l16_a1_capture_run.1234"
                 arm_value = "A1_CAPTURE_20000000NS_GAIN_1.0_ONCE"
+            if profile != "all16-hdr-async":
+                exposure_count = "1"
+                exposure_order = "common_for_selected_modules"
+                exposure_plan = "selected:20000000"
+                async_shim = "disabled"
 
             capture_attempted = os.environ.get("FAKE_CAPTURE_ATTEMPTED", "yes")
             final_status = os.environ.get("FAKE_FINAL_STATUS", "PASS")
             cleanup_ok = os.environ.get("FAKE_CLEANUP_OK", "yes")
+            autofocus_attempted = (
+                os.environ.get("FAKE_AUTOFOCUS_ATTEMPTED", "yes")
+                if profile in ("a1-center-af", "a1-inline-af")
+                else os.environ.get("FAKE_AUTOFOCUS_ATTEMPTED", "no")
+            )
+            asic_reset_attempted = (
+                os.environ.get("FAKE_ASIC_RESET_ATTEMPTED", "yes")
+                if profile == "a1-center-af"
+                else os.environ.get("FAKE_ASIC_RESET_ATTEMPTED", "no")
+            )
             pixel = (
                 struct.pack("<4sQQIB7x", b"LELR", 43, 35, 8, 0)
                 + b"raw"
@@ -219,13 +429,28 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
             pixel_sha1 = hashlib.sha1(pixel).hexdigest()
             reboot_required = (
                 "yes"
-                if capture_attempted == "yes"
-                and (profile == "all16" or final_status != "PASS")
+                if asic_reset_attempted == "yes"
+                or autofocus_attempted == "yes"
+                or (
+                    capture_attempted == "yes"
+                    and (profile.startswith("all16") or final_status != "PASS")
+                )
                 else "no"
             )
             result = (
                 f"mode={mode}\\n"
+                f"exposure_argument_count={exposure_count}\\n"
+                f"exposure_argument_module_order={exposure_order}\\n"
+                f"exposure_plan_module_order={exposure_plan}\\n"
                 f"capture_attempted={capture_attempted}\\n"
+                f"asic_reset_attempted={asic_reset_attempted}\\n"
+                f"asic_reset_exit_status={'0' if asic_reset_attempted == 'yes' else 'not_run'}\\n"
+                f"asic_ready_exit_status={'0' if asic_reset_attempted == 'yes' else 'not_run'}\\n"
+                f"asic_ready_response={'ready_01' if asic_reset_attempted == 'yes' else 'not_run'}\\n"
+                f"asic_power_off_exit_status={'0' if asic_reset_attempted == 'yes' else 'not_run'}\\n"
+                f"autofocus_attempted={autofocus_attempted}\\n"
+                f"autofocus_exit_status={'0' if autofocus_attempted == 'yes' else 'not_run'}\\n"
+                f"autofocus_response={('camera3_af_state_focused_locked_inline_hal_session' if profile == 'a1-inline-af' else 'interrupt_received_status_zero') if autofocus_attempted == 'yes' else 'not_run'}\\n"
                 "lcc_exit_status=0\\n"
                 "manual_control_after=manual_control mode is 0x0\\n"
                 "lcc_process_after=no\\n"
@@ -233,6 +458,8 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
                 "settled_camera_clients=none\\n"
                 "media_after=running\\n"
                 "lightsvr_after=running\\n"
+                f"async_shim={async_shim}\\n"
+                f"a1_af_shim={'verified' if profile == 'a1-inline-af' else 'disabled'}\\n"
                 f"normal_reboot_required={reboot_required}\\n"
                 f"workdir={workdir}\\n"
                 "lri_output_count=1\\n"
@@ -257,7 +484,13 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
             if args[0] == "pull":
                 source, target = args[1], Path(args[2])
                 if source.endswith(
-                    ("light_l16_a1_capture.result", "light_l16_all16_capture.result")
+                    (
+                        "light_l16_a1_capture.result",
+                        "light_l16_a1_center_af_capture.result",
+                        "light_l16_a1_inline_af_capture.result",
+                        "light_l16_all16_capture.result",
+                        "light_l16_all16_hdr_async_capture.result",
+                    )
                 ):
                     if os.environ.get("FAKE_PULL_RESULT_FAIL") == "1":
                         raise SystemExit(1)
@@ -279,6 +512,18 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
                 raise SystemExit(1)
 
             command = args[1]
+            if "wc -c < '/data/local/tmp/liblcc_async_writer_shim.so'" in command:
+                print("8904")
+                raise SystemExit(0)
+            if "sha1sum '/data/local/tmp/liblcc_async_writer_shim.so'" in command:
+                print("150e53a736624010dc7fb741490ea8dca7afbfb8  shim")
+                raise SystemExit(0)
+            if "wc -c < '/data/local/tmp/liblcc_a1_focus_capture_shim.so'" in command:
+                print("13764")
+                raise SystemExit(0)
+            if "sha1sum '/data/local/tmp/liblcc_a1_focus_capture_shim.so'" in command:
+                print("67647b71767ab2b68a214fae87578e24eb3433b2  shim")
+                raise SystemExit(0)
             if "sha1sum" in command:
                 print(os.environ["EXPECTED_PAYLOAD_SHA1"] + "  payload")
                 raise SystemExit(0)
@@ -345,6 +590,36 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
     )
     fake_adb.chmod(0o755)
 
+    fake_shim = tmp_path / "liblcc_async_writer_shim.so"
+    fake_shim.write_bytes(bytes(8904))
+    fake_af_shim = tmp_path / "liblcc_a1_focus_capture_shim.so"
+    fake_af_shim.write_bytes(bytes(13764))
+    fake_sha1sum = tmp_path / "sha1sum"
+    fake_sha1sum.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import hashlib
+            import os
+            import sys
+            from pathlib import Path
+
+            target = os.path.realpath(sys.argv[1])
+            shim = os.path.realpath(os.environ.get("FAKE_SHIM_PATH", ""))
+            af_shim = os.path.realpath(os.environ.get("FAKE_AF_SHIM_PATH", ""))
+            if target == shim:
+                digest = "150e53a736624010dc7fb741490ea8dca7afbfb8"
+            elif target == af_shim:
+                digest = "67647b71767ab2b68a214fae87578e24eb3433b2"
+            else:
+                digest = hashlib.sha1(Path(sys.argv[1]).read_bytes()).hexdigest()
+            print(f"{digest}  {sys.argv[1]}")
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_sha1sum.chmod(0o755)
+
     payload = ROOT / "device" / "a1_capture_once.sh"
     env = os.environ.copy()
     env.update(
@@ -353,6 +628,9 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
             "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "output"),
             "FAKE_ADB_STATE": str(state),
             "EXPECTED_PAYLOAD_SHA1": hashlib.sha1(payload.read_bytes()).hexdigest(),
+            "FAKE_SHIM_PATH": str(fake_shim),
+            "FAKE_AF_SHIM_PATH": str(fake_af_shim),
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
         }
     )
     completed = subprocess.run(
@@ -403,12 +681,140 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
         encoding="utf-8"
     )
 
+    center_af_state = tmp_path / "fake-adb-center-af-state"
+    center_af_state.mkdir()
+    center_af_env = env.copy()
+    center_af_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "center-af-output"),
+            "FAKE_ADB_STATE": str(center_af_state),
+            "FAKE_PROFILE": "a1-center-af",
+        }
+    )
+    center_af = subprocess.run(
+        [
+            shell,
+            str(supervisor),
+            "--execute-fixed-a1-center-af-then-20ms-capture-once-and-reboot",
+        ],
+        cwd=ROOT,
+        env=center_af_env,
+        capture_output=True,
+        text=True,
+    )
+    assert center_af.returncode == 0, center_af.stderr
+    assert (center_af_state / "triggered").exists()
+    assert (center_af_state / "rebooted").exists()
+    assert "mandatory normal reboot" in center_af.stderr
+    center_af_results = list((tmp_path / "center-af-output").glob("*/result.txt"))
+    assert len(center_af_results) == 1
+    center_af_result = center_af_results[0].read_text(encoding="utf-8")
+    assert "mode=A1_CENTER_AF_THEN_FIXED_CAPTURE_20MS_ONCE" in center_af_result
+    assert "asic_reset_attempted=yes" in center_af_result
+    assert "asic_ready_response=ready_01" in center_af_result
+    assert "autofocus_attempted=yes" in center_af_result
+    assert "autofocus_response=interrupt_received_status_zero" in center_af_result
+
+    inline_af_state = tmp_path / "fake-adb-inline-af-state"
+    inline_af_state.mkdir()
+    inline_af_env = env.copy()
+    inline_af_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "inline-af-output"),
+            "LIGHT_L16_A1_AF_SHIM": str(fake_af_shim),
+            "FAKE_ADB_STATE": str(inline_af_state),
+            "FAKE_PROFILE": "a1-inline-af",
+        }
+    )
+    inline_af = subprocess.run(
+        [
+            shell,
+            str(supervisor),
+            "--execute-fixed-a1-inline-af-then-20ms-capture-once-and-reboot",
+        ],
+        cwd=ROOT,
+        env=inline_af_env,
+        capture_output=True,
+        text=True,
+    )
+    assert inline_af.returncode == 0, inline_af.stderr
+    assert (inline_af_state / "triggered").exists()
+    assert (inline_af_state / "rebooted").exists()
+    inline_af_results = list((tmp_path / "inline-af-output").glob("*/result.txt"))
+    assert len(inline_af_results) == 1
+    inline_af_result = inline_af_results[0].read_text(encoding="utf-8")
+    assert "mode=A1_INLINE_CENTER_AF_FIXED_CAPTURE_20MS_ONCE" in inline_af_result
+    assert "asic_reset_attempted=no" in inline_af_result
+    assert "autofocus_attempted=yes" in inline_af_result
+    assert (
+        "autofocus_response=camera3_af_state_focused_locked_inline_hal_session"
+        in inline_af_result
+    )
+    assert "a1_af_shim=verified" in inline_af_result
+
     all16_wrapper = ROOT / "host" / "run_all16_capture_once.sh"
     subprocess.run([shell, "-n", str(all16_wrapper)], check=True)
     wrapper_without_confirmation = subprocess.run(
         [shell, str(all16_wrapper)], capture_output=True, text=True
     )
     assert wrapper_without_confirmation.returncode == 2
+
+    hdr_wrapper = ROOT / "host" / "run_all16_hdr_capture_once.sh"
+    subprocess.run([shell, "-n", str(hdr_wrapper)], check=True)
+    hdr_description = subprocess.run(
+        [shell, str(hdr_wrapper), "--describe"],
+        env={**os.environ, "LIGHT_L16_ADB": "/definitely/not/adb"},
+        capture_output=True,
+        text=True,
+    )
+    assert hdr_description.returncode == 0
+    assert "A1   1.25ms" in hdr_description.stdout
+    assert "C6   20ms" in hdr_description.stdout
+    assert "one lcc request" in hdr_description.stdout
+    assert "not run on a camera yet" in hdr_description.stdout
+    hdr_without_confirmation = subprocess.run(
+        [shell, str(hdr_wrapper)], capture_output=True, text=True
+    )
+    assert hdr_without_confirmation.returncode == 2
+    assert "No ADB or camera action was attempted." in hdr_without_confirmation.stderr
+
+    hdr_state = tmp_path / "fake-adb-hdr-state"
+    hdr_state.mkdir()
+    hdr_env = env.copy()
+    hdr_env.update(
+        {
+            "LIGHT_L16_OUTPUT_ROOT": str(tmp_path / "hdr-output"),
+            "LIGHT_L16_ASYNC_SHIM": str(fake_shim),
+            "FAKE_ADB_STATE": str(hdr_state),
+            "FAKE_PROFILE": "all16-hdr-async",
+        }
+    )
+    hdr = subprocess.run(
+        [
+            shell,
+            str(hdr_wrapper),
+            "--execute-fixed-all16-hdr-async-shim-1p25-5-20ms-once-and-reboot",
+        ],
+        cwd=ROOT,
+        env=hdr_env,
+        capture_output=True,
+        text=True,
+    )
+    assert hdr.returncode == 0, hdr.stderr
+    assert (hdr_state / "triggered").exists()
+    assert (hdr_state / "rebooted").exists()
+    assert "mandatory normal reboot" in hdr.stderr
+    hdr_results = list((tmp_path / "hdr-output").glob("*/result.txt"))
+    assert len(hdr_results) == 1
+    hdr_result = hdr_results[0].read_text(encoding="utf-8")
+    assert "mode=ALL16_HDR_ASYNC_SHIM_SINGLE_REQUEST_1P25_5_20MS_ONCE" in hdr_result
+    assert "exposure_argument_count=16" in hdr_result
+    assert "exposure_argument_module_order=A1,A2,A3,A4,A5,B1" in hdr_result
+    hdr_manifests = list((tmp_path / "hdr-output").glob("*/pixels/manifest.txt"))
+    assert len(hdr_manifests) == 1
+    hdr_manifest = hdr_manifests[0].read_text(encoding="utf-8")
+    assert "profile=all16-hdr-async" in hdr_manifest
+    assert "exposure_plan_module_order=A1:1250000,A2:20000000" in hdr_manifest
 
     ambiguous_state = tmp_path / "fake-adb-ambiguous-trigger-state"
     ambiguous_state.mkdir()
@@ -531,10 +937,14 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
     assert (failed_pull_state / "triggered").exists()
     assert (failed_pull_state / "rebooted").exists()
     failed_pull_calls = (failed_pull_state / "calls.log").read_text(encoding="utf-8")
-    assert (
+    staging_cleanup = (
         "rm -f '/data/local/tmp/light_l16_a1_capture_once.sh' "
         "'/data/local/tmp/light_l16_a1_capture.armed'"
-    ) not in failed_pull_calls
+    )
+    assert failed_pull_calls.count(staging_cleanup) == 1
+    assert failed_pull_calls.index(staging_cleanup) < failed_pull_calls.index(
+        "['push',"
+    )
 
 
 def test_repository_contains_no_proprietary_binary_extensions() -> None:
@@ -547,6 +957,23 @@ def test_repository_contains_no_proprietary_binary_extensions() -> None:
         and path.suffix.lower() in forbidden_suffixes
     ]
     assert offenders == []
+
+
+def test_android_shim_build_script_is_bounded_and_syntax_valid() -> None:
+    build_script = ROOT / "host" / "build_lcc_async_shim.sh"
+    text = build_script.read_text(encoding="utf-8")
+    shell = shutil.which("sh")
+    assert shell is not None
+    subprocess.run([shell, "-n", str(build_script)], check=True)
+
+    assert "--target=armv7a-linux-androideabi23" in text
+    assert "-DL16_ANDROID_FREESTANDING" in text
+    assert "-mfloat-abi=softfp" in text
+    assert "-nostdlib" in text
+    assert "--hash-style=sysv" in text
+    assert "-z,noexecstack" in text
+    assert "--build-id=sha1" in text
+    assert "refusing to place a generated binary inside the repository" in text
 
 
 def test_relative_markdown_links_resolve() -> None:
