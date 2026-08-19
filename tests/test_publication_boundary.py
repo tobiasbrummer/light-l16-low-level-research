@@ -86,8 +86,10 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
         subprocess.run([shell, "-n", str(payload)], check=True)
 
     control_doc = (ROOT / "docs" / "lcc-control.md").read_text(encoding="utf-8")
+    # The count is spelled out so adding a profile forces the doc to be read,
+    # not just the byte size bumped.
     assert (
-        f"current {len(payload.read_bytes()):,}-byte eight-profile payload"
+        f"current {len(payload.read_bytes()):,}-byte ten-profile payload"
         in control_doc
     )
     assert hashlib.sha1(payload.read_bytes()).hexdigest() in control_doc
@@ -106,6 +108,8 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "/data/local/tmp/light_l16_all16_capture_once.sh" in text
     assert "/data/local/tmp/light_l16_all16_async_capture_once.sh" in text
     assert "/data/local/tmp/light_l16_all16_hdr_async_capture_once.sh" in text
+    assert "/data/local/tmp/light_l16_timeout_probe_once.sh" in text
+    assert "/data/local/tmp/light_l16_timeout_probe_6s_once.sh" in text
 
     def profile_block(path: str) -> str:
         start = text.index(f"    {path})")
@@ -133,6 +137,12 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     )
     all16_hdr_async_profile = profile_block(
         "/data/local/tmp/light_l16_all16_hdr_async_capture_once.sh"
+    )
+    timeout_probe_profile = profile_block(
+        "/data/local/tmp/light_l16_timeout_probe_once.sh"
+    )
+    timeout_probe_6s_profile = profile_block(
+        "/data/local/tmp/light_l16_timeout_probe_6s_once.sh"
     )
     for profile in (a1_profile, a1_center_af_profile, a1_async_profile):
         assert "MASK0=02\n        MASK1=00\n        MASK2=00" in profile
@@ -167,6 +177,34 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "USE_ASYNC_SHIM=no" in all16_profile
     assert "USE_ASYNC_SHIM=yes" in all16_async_profile
     assert "USE_ASYNC_SHIM=yes" in all16_hdr_async_profile
+    # The probe raises the completion budget rather than any capture
+    # parameter: all sixteen modules, one exposure, gain unchanged.
+    # Both probes differ from each other in the exposure alone.
+    for profile in (timeout_probe_profile, timeout_probe_6s_profile):
+        assert "MASK0=FE\n        MASK1=FF\n        MASK2=01" in profile
+        # One combined preload does both jobs, so the plain async shim is off.
+        assert "USE_ASYNC_SHIM=no" in profile
+        assert "USE_TIMEOUT_SHIM=yes" in profile
+        assert "ALLOW_CLEAN_NO_REBOOT=no" in profile
+        assert "EXPOSURE_COUNT=1" in profile
+        assert "CAPTURE_TIMEOUT_SECONDS=180" in profile
+    assert "EXPOSURE_ARGS=8000000000" in timeout_probe_profile
+    assert "EXPOSURE_PLAN=selected:8000000000" in timeout_probe_profile
+    # 6 s sits just past the 15 s stock budget once ~14 s of readout is added,
+    # while 1 s still completes.  It is the narrowest test of the shim.
+    assert "EXPOSURE_ARGS=6000000000" in timeout_probe_6s_profile
+    assert "EXPOSURE_PLAN=selected:6000000000" in timeout_probe_6s_profile
+    # Distinct result, arm and work paths, so one probe cannot read the other.
+    for marker in ("light_l16_timeout_probe_6s.result",
+                   "light_l16_timeout_probe_6s.armed",
+                   "light_l16_timeout_probe_6s_run"):
+        assert marker in timeout_probe_6s_profile
+        assert marker not in timeout_probe_profile
+    # Second-scale exposures overflow a 32-bit shell, so the payload must not
+    # compare them numerically.
+    assert '[ "${#EXPOSURE_VALUE}" -le 11 ]' in text
+    assert '"$EXPOSURE_VALUE" -gt 0' not in text
+
     assert "EXPOSURE_COUNT=16" in all16_hdr_async_profile
     assert (
         "EXPOSURE_ARGS='1250000 20000000 5000000 5000000 20000000 "
@@ -217,7 +255,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "CAPTURE_TIMEOUT_SECONDS=60" in text
     assert "MIN_DATA_FREE_KB=262144" in text
     assert "MIN_DATA_FREE_KB=1048576" in text
-    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 8
+    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 10
     assert "DIAGNOSTIC_LOG_LINES=500" not in text
     assert "ALLOW_CLEAN_NO_REBOOT=yes" in text
     assert "ALLOW_CLEAN_NO_REBOOT=no" in text

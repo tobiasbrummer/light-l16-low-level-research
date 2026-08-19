@@ -10,6 +10,7 @@ export PATH
 RUN_AUTOFOCUS=no
 RUN_FACTORY_ASIC_RESET=no
 USE_A1_AF_SHIM=no
+USE_TIMEOUT_SHIM=no
 EXPOSURE_COUNT=1
 EXPOSURE_ARGS=20000000
 EXPOSURE_ORDER=common_for_selected_modules
@@ -133,6 +134,58 @@ case "$0" in
         ALLOW_CLEAN_NO_REBOOT=no
         USE_ASYNC_SHIM=yes
         ;;
+    /data/local/tmp/light_l16_timeout_probe_once.sh)
+        OUT=/data/local/tmp/light_l16_timeout_probe.result
+        ARM_FILE=/data/local/tmp/light_l16_timeout_probe.armed
+        ARM_VALUE=TIMEOUT_PROBE_ALL16_8000000000NS_GAIN_1.0_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_timeout_probe_run
+        MODE=TIMEOUT_PROBE_ALL16_8S_ONCE
+        MASK0=FE
+        MASK1=FF
+        MASK2=01
+        SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3 async_shim=required timeout_shim=required probe=8s'
+        # 8 s of integration plus readout and the LRI write.  The stock
+        # completion budget would be 15 s and the run fails around 6 s; the
+        # timeout shim raises it, and this outer bound still cuts a hung
+        # pipeline short from outside.
+        CAPTURE_TIMEOUT_SECONDS=180
+        MIN_DATA_FREE_KB=1048576
+        DIAGNOSTIC_LOG_LINES=2000
+        ALLOW_CLEAN_NO_REBOOT=no
+        USE_ASYNC_SHIM=no
+        USE_TIMEOUT_SHIM=yes
+        EXPOSURE_COUNT=1
+        EXPOSURE_ARGS=8000000000
+        EXPOSURE_ORDER=common_for_selected_modules
+        EXPOSURE_PLAN=selected:8000000000
+        ;;
+    /data/local/tmp/light_l16_timeout_probe_6s_once.sh)
+        OUT=/data/local/tmp/light_l16_timeout_probe_6s.result
+        ARM_FILE=/data/local/tmp/light_l16_timeout_probe_6s.armed
+        ARM_VALUE=TIMEOUT_PROBE_ALL16_6000000000NS_GAIN_1.0_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_timeout_probe_6s_run
+        MODE=TIMEOUT_PROBE_ALL16_6S_ONCE
+        MASK0=FE
+        MASK1=FF
+        MASK2=01
+        SELECTION_DESCRIPTION='mask=FE FF 01 modules=A1-A5,B1-B5,C1-C6 asics=1,2,3 async_shim=required timeout_shim=required probe=6s'
+        # The narrowest test of the shim.  lcc derives thread_time_out as
+        # (uint)(max_capture_delay + exposure_s) + 1, which carries no readout
+        # term, and the HAL turns anything at or below 9 into a flat 15 s
+        # budget.  Reading all sixteen modules takes about 14 s, so 1 s of
+        # integration still completes and 6 s does not.  If the shim works,
+        # this exposure is the first that must pass.
+        CAPTURE_TIMEOUT_SECONDS=180
+        MIN_DATA_FREE_KB=1048576
+        DIAGNOSTIC_LOG_LINES=2000
+        ALLOW_CLEAN_NO_REBOOT=no
+        USE_ASYNC_SHIM=no
+        USE_TIMEOUT_SHIM=yes
+        EXPOSURE_COUNT=1
+        EXPOSURE_ARGS=6000000000
+        EXPOSURE_ORDER=common_for_selected_modules
+        EXPOSURE_PLAN=selected:6000000000
+        ;;
     /data/local/tmp/light_l16_all16_hdr_async_capture_once.sh)
         OUT=/data/local/tmp/light_l16_all16_hdr_async_capture.result
         ARM_FILE=/data/local/tmp/light_l16_all16_hdr_async_capture.armed
@@ -172,6 +225,7 @@ PROG_APP_SOURCE=/system/etc/prog_app_p2
 HAL_SOURCE=/system/lib/hw/camera.msm8996.so
 SHIM_SOURCE=/data/local/tmp/liblcc_async_writer_shim.so
 AF_SHIM_SOURCE=/data/local/tmp/liblcc_a1_focus_capture_shim.so
+TIMEOUT_SHIM_SOURCE=/data/local/tmp/liblcc_async_timeout_shim.so
 MANUAL_CONTROL=/sys/class/light_ccb/common/manual_control
 LRI_DIR=/sdcard/DCIM/camera
 EXPECTED_BUILD=00WW_1_351
@@ -188,6 +242,8 @@ EXPECTED_HAL_SIZE=1338100
 EXPECTED_HAL_SHA1=016602174e0635e79cda5566d5e850c1294a9300
 EXPECTED_SHIM_SIZE=8904
 EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8
+EXPECTED_TIMEOUT_SHIM_SIZE=9904
+EXPECTED_TIMEOUT_SHIM_SHA1=243e6419be6c6e06e4cb21c5204c74339e79985f
 EXPECTED_AF_SHIM_SIZE=13764
 EXPECTED_AF_SHIM_SHA1=67647b71767ab2b68a214fae87578e24eb3433b2
 
@@ -218,6 +274,8 @@ LCC_COPY=
 PROG_APP_COPY=
 SHIM_COPY=
 AF_SHIM_COPY=
+TIMEOUT_SHIM_COPY=
+TIMEOUT_SHIM_STATUS=disabled
 ASYNC_SHIM_STATUS=disabled
 A1_AF_SHIM_STATUS=disabled
 LRI_OUTPUT_COUNT=unknown
@@ -419,6 +477,12 @@ finish() {
         fi
         rm -f "$SHIM_SOURCE"
     fi
+    if [ "$USE_TIMEOUT_SHIM" = "yes" ]; then
+        if [ -n "$TIMEOUT_SHIM_COPY" ] && [ -f "$TIMEOUT_SHIM_COPY" ]; then
+            rm -f "$TIMEOUT_SHIM_COPY"
+        fi
+        rm -f "$TIMEOUT_SHIM_SOURCE"
+    fi
     if [ "$USE_A1_AF_SHIM" = "yes" ]; then
         if [ -n "$AF_SHIM_COPY" ] && [ -f "$AF_SHIM_COPY" ]; then
             rm -f "$AF_SHIM_COPY"
@@ -472,6 +536,7 @@ finish() {
     printf 'lightsvr_after=%s\n' "$LIGHTSVR_AFTER"
     printf 'normal_reboot_required=%s\n' "$NORMAL_REBOOT_REQUIRED"
     printf 'async_shim=%s\n' "$ASYNC_SHIM_STATUS"
+    printf 'timeout_shim=%s\n' "$TIMEOUT_SHIM_STATUS"
     printf 'a1_af_shim=%s\n' "$A1_AF_SHIM_STATUS"
     printf 'lri_output_count=%s\n' "$LRI_OUTPUT_COUNT"
     printf 'lri_output_path=%s\n' "$LRI_OUTPUT_PATH"
@@ -618,6 +683,22 @@ if [ "$USE_ASYNC_SHIM" = "yes" ]; then
     [ "$SHIM_SHA1" = "$EXPECTED_SHIM_SHA1" ] || fail unexpected_async_shim_hash
 fi
 
+if [ "$USE_TIMEOUT_SHIM" = "yes" ]; then
+    TIMEOUT_SHIM_STATUS=required_unverified
+    [ -r "$TIMEOUT_SHIM_SOURCE" ] || fail timeout_shim_missing
+    TIMEOUT_SHIM_SIZE=$(/system/bin/toybox wc -c < "$TIMEOUT_SHIM_SOURCE") || \
+        fail cannot_size_timeout_shim
+    [ "$TIMEOUT_SHIM_SIZE" = "$EXPECTED_TIMEOUT_SHIM_SIZE" ] || \
+        fail unexpected_timeout_shim_size
+    TIMEOUT_SHIM_SHA1=$(/system/bin/toybox sha1sum "$TIMEOUT_SHIM_SOURCE") || \
+        fail cannot_hash_timeout_shim
+    TIMEOUT_SHIM_SHA1=${TIMEOUT_SHIM_SHA1%% *}
+    printf 'timeout_shim_size=%s timeout_shim_sha1=%s\n' \
+        "$TIMEOUT_SHIM_SIZE" "$TIMEOUT_SHIM_SHA1"
+    [ "$TIMEOUT_SHIM_SHA1" = "$EXPECTED_TIMEOUT_SHIM_SHA1" ] || \
+        fail unexpected_timeout_shim_hash
+fi
+
 if [ "$USE_A1_AF_SHIM" = "yes" ]; then
     A1_AF_SHIM_STATUS=required_unverified
     [ -r "$AF_SHIM_SOURCE" ] || fail a1_af_shim_missing
@@ -698,6 +779,18 @@ if [ "$USE_ASYNC_SHIM" = "yes" ]; then
     [ "$SHIM_COPY_SHA1" = "$EXPECTED_SHIM_SHA1" ] || \
         fail copied_async_shim_hash_mismatch
     printf 'async_shim_copy_sha1=%s\n' "$SHIM_COPY_SHA1"
+fi
+
+if [ "$USE_TIMEOUT_SHIM" = "yes" ]; then
+    TIMEOUT_SHIM_COPY="$WORKDIR/liblcc_async_timeout_shim.so"
+    cp "$TIMEOUT_SHIM_SOURCE" "$TIMEOUT_SHIM_COPY" || fail cannot_copy_timeout_shim
+    chmod 0400 "$TIMEOUT_SHIM_COPY" || fail cannot_secure_timeout_shim_copy
+    TIMEOUT_SHIM_COPY_SHA1=$(/system/bin/toybox sha1sum "$TIMEOUT_SHIM_COPY") || \
+        fail cannot_hash_timeout_shim_copy
+    TIMEOUT_SHIM_COPY_SHA1=${TIMEOUT_SHIM_COPY_SHA1%% *}
+    [ "$TIMEOUT_SHIM_COPY_SHA1" = "$EXPECTED_TIMEOUT_SHIM_SHA1" ] || \
+        fail copied_timeout_shim_hash_mismatch
+    printf 'timeout_shim_copy_sha1=%s\n' "$TIMEOUT_SHIM_COPY_SHA1"
 fi
 
 if [ "$USE_A1_AF_SHIM" = "yes" ]; then
@@ -931,7 +1024,15 @@ for EXPOSURE_VALUE in $EXPOSURE_ARGS; do
     case "$EXPOSURE_VALUE" in
         ""|*[!0-9]*) fail invalid_compiled_exposure_value ;;
     esac
-    [ "$EXPOSURE_VALUE" -gt 0 ] || fail nonpositive_compiled_exposure_value
+    # Android 6 here is 32-bit and its shell overflows past about 2.1e9:
+    # $((8000000000)) evaluates to -589934592, so a second-scale exposure
+    # would be rejected as nonpositive.  Bound the digit count instead,
+    # which is exact for decimal strings.
+    [ "${#EXPOSURE_VALUE}" -ge 1 ] || fail empty_compiled_exposure_value
+    [ "${#EXPOSURE_VALUE}" -le 11 ] || fail compiled_exposure_above_sensor_ceiling
+    case "$EXPOSURE_VALUE" in
+        0|00*) fail nonpositive_compiled_exposure_value ;;
+    esac
     EXPOSURE_VALUE_COUNT=$((EXPOSURE_VALUE_COUNT + 1))
 done
 [ "$EXPOSURE_VALUE_COUNT" -eq "$EXPOSURE_COUNT" ] || \
@@ -972,7 +1073,16 @@ done
 set -- "$@" -g "$GAIN"
 (
     cd "$WORKDIR" || exit 126
-    if [ "$USE_ASYNC_SHIM" = "yes" ]; then
+    if [ "$USE_TIMEOUT_SHIM" = "yes" ]; then
+        # One preload doing both jobs.  Two separate preloads did load
+        # correctly, but each runs its own child self-test, and that extra
+        # system() call broke the helper-command count the async half
+        # verifies.
+        /system/bin/timeout -k 5s "${CAPTURE_TIMEOUT_SECONDS}s" \
+            /system/bin/sh -c \
+            'LD_PRELOAD=$1; export LD_PRELOAD; shift; exec "$@"' \
+            l16-timeout-launch "$TIMEOUT_SHIM_COPY" "$LCC_COPY" "$@"
+    elif [ "$USE_ASYNC_SHIM" = "yes" ]; then
         /system/bin/timeout -k 5s "${CAPTURE_TIMEOUT_SECONDS}s" \
             /system/bin/sh -c \
             'LD_PRELOAD=$1; export LD_PRELOAD; shift; exec "$@"' \
@@ -1007,6 +1117,25 @@ if [ "$USE_ASYNC_SHIM" = "yes" ]; then
     fi
     ASYNC_SHIM_STATUS=verified
     printf 'async_shim_runtime_markers=verified\n'
+fi
+
+if [ "$USE_TIMEOUT_SHIM" = "yes" ]; then
+    for MARKER in \
+        loaded preload_cleared resolve_targets_ok preload_child_selftest_ok \
+        timeout_patched enqueue_ok worker_start worker_done_ok \
+        close_wait close_continue helper_commands_ok close_reports_ok
+    do
+        MARKER_COUNT=$(/system/bin/toybox grep -c \
+            "^L16_ASYNC_SHIM $MARKER$" "$WORKDIR/lcc.txt")
+        [ "$MARKER_COUNT" = "1" ] || fail "timeout_shim_marker_${MARKER}_count_${MARKER_COUNT}"
+    done
+    if /system/bin/toybox grep -Eq \
+        '^L16_ASYNC_SHIM .*(error|failed|not_patched)' "$WORKDIR/lcc.txt"
+    then
+        fail timeout_shim_reported_error
+    fi
+    TIMEOUT_SHIM_STATUS=verified
+    printf 'timeout_shim_runtime_markers=verified\n'
 fi
 
 if [ "$USE_A1_AF_SHIM" = "yes" ]; then

@@ -755,13 +755,36 @@ to the fixed `A1-A5` mask as the next still-unverified multi-module step.
 
 ## Device-side wrapper syntax
 
-The current 44,185-byte eight-profile payload has host SHA-1:
+The current 50,264-byte ten-profile payload has host SHA-1:
 
 ```text
-d1aa05a77de4c8a45296edbaadf3753aa66cc840
+caee8d954e44a75ae9ef88ecfcc8f3f3fddbfe05
 ```
 
-Its host shell syntax check and automated tests pass. The eighth profile is the
+Its host shell syntax check and automated tests pass. The ninth and tenth
+profiles are timeout probes: all sixteen modules at gain 1.0 with the combined
+preload loaded, at 8 s and 6 s respectively. They were written to test whether
+raising LCC's completion budget lets an exposure past the roughly six-second
+ceiling finish. Both have now been executed and the answer is no; see "Long
+exposures fail in `writeFile`, not on the completion timeout" below. They are
+kept because they reproduce that negative result.
+
+The 6 s probe is the narrower of the two and was added after the 8 s probe
+returned `Closed camera pipeline, 0` despite a confirmed patch. `lcc` derives
+its own budget in `wf_run_capture` as
+
+```text
+thread_time_out = (uint32)(max_capture_delay + exposure_s
+                           + single_burst_delay * (burst_cnt - 1)) + 1
+```
+
+which carries no readout term at all, and the HAL turns any value at or below 9
+into a flat 15 s. Reading all sixteen modules takes about 14 s, measured from
+the 16-18 s spacing of the successful one-second dark frames. So 1 s of
+integration completes and 6 s does not, and 6 s is the first exposure the shim
+must carry if the 15 s budget is really the binding limit. The 8 s probe sits
+far enough past that edge for other limits to interfere. The eighth profile is
+the
 fixed `A1-A5` same-session AF request described above. Its first physical LRI
 has been decoded successfully: exactly A1-A5, one shared image ID/timestamp,
 `focus_achieved=true` in both capture blocks, five nonzero lens positions, and
@@ -769,7 +792,10 @@ no lens timeout. Its matching supervisor TXT also verifies the expected payload
 and shim hashes, focused-lock result, zero LCC exit, complete cleanup, settled
 services and camera clients, identical LRI size/SHA-1, and intended normal
 reboot. The seventh profile's exact per-module HDR exposure
-assignment also remains unexecuted. The preceding 43,160-byte seven-profile
+assignment also remains unexecuted. The preceding 48,937-byte nine-profile payload had SHA-1
+`51ba0377db913cf4361a34e301935d361011eeb4`; it carried the 8 s probe alone and
+completed the physically executed run that motivated the 6 s probe. The
+preceding 43,160-byte seven-profile
 payload with SHA-1 `293c6f246728ccc457b7ce2f5bb4fdedbc6db8f5`
 completed the physical A1 inline-AF capture. The preceding 43,655-byte payload
 used the failed raw-CCB same-session approach. The preceding 38,779-byte six-profile
@@ -1218,3 +1244,102 @@ runner properties, and no `lcc` process. The only CameraService client observed
 immediately afterward was the normal stock package `light.co.lightcamera`, not
 a surviving factory session; a later check found no active client. No installed
 HAL or partition was modified.
+
+## Long exposures fail in `writeFile`, not on the completion timeout
+
+The roughly six-second exposure ceiling is not a timeout. Raising LCC's
+completion budget from 15 s to 180 s changes nothing about it. This section
+records both the disproved hypothesis and the measurement that replaced it,
+because the disassembly that motivated the hypothesis was correct and still
+misled us.
+
+### What `lcc` computes
+
+`/system/etc/lcc` is not stripped and carries DWARF debug information, including
+the original source path `light/lcc/lcc_cli_tool.c` from the 00WW-1.3.5.1 build.
+The budget is derived in `wf_run_capture` at `0x2368`, and the store at `0x2830`
+is exactly:
+
+```text
+exposure_s      = exposure_ns / 1e9
+total_delay     = max_capture_delay + exposure_s
+                  + single_burst_delay * (burst_cnt - 1)
+thread_time_out = (uint32)total_delay + 1
+```
+
+The 1e9 divisor is a verified literal at `0x2a78`, and `lcc` prints its own
+inputs one line earlier, so the arithmetic can be checked against any run: a 6 s
+request logs `max_capture_delay: 0.100000` and `total_delay: 6.100000`, then
+`Thread time out: 7`.
+
+That value carries no readout term. Reading all sixteen modules takes about 14 s
+-- measured from the 16-18 s spacing of six consecutive successful one-second
+dark frames -- and whether one module or sixteen are read does not enter the
+formula. The HAL then turns any value at or below 9 into a flat 15 s. So the
+budget stays constant at 15 s across the entire range where the requirement
+grows, which predicted the observed edge between 1 s and 6 s exactly.
+
+### The measurement that disproved it
+
+A 6 s all-16 capture was run with the combined preload, which patches the HAL's
+timeout field to 180 s. 6 s was chosen deliberately: it is the first exposure
+past the known edge, where the requirement is about 20 s and only the 15 s
+budget should stand in the way. The patch applied -- the shim verified the field
+against the formula before writing, logged `timeout_patched`, and the worker
+completed with `worker_done_ok` -- and the capture still failed with
+`Closed camera pipeline, 0` and a 32,790,777-byte LRI.
+
+An earlier 8 s run at the stock budget produced 32,452,609 bytes. Twelve times
+the completion budget produced no additional data.
+
+### What actually fails
+
+`logcat` from the 6 s run carries an error the earlier runs' logs never
+surfaced:
+
+```text
+LccInterface::writeFile(): 439: Ion Fd: 98, size: 16228352
+LccInterface::writeFile(): 443: mmap failed on ion fd: 98
+```
+
+Seventeen of twenty buffers fail to map. The two successful all-16 runs at 20 ms
+contain zero such errors. The failure accounts for the file size exactly:
+
+```text
+2 x 16,228,352  module buffers that mapped
++      334,073  trailing buffer that mapped
+=   32,790,777  bytes, the LRI on disk
+```
+
+So the LRI is not a truncated write. It contains, in full, everything that could
+be mapped. The 16,228,352-byte buffer size times sixteen modules is 259,653,632,
+consistent with the 259,999,993-byte complete frames.
+
+The order matters: the first two buffers map, the next seventeen fail, and the
+final 334,073-byte buffer maps again. All twenty log lines share the same one to
+two milliseconds, so nothing expires while the file is being written -- the
+state already existed. A 4,096-byte mapping failing while a later 334,073-byte
+mapping succeeds also rules out address-space exhaustion.
+
+The HAL code at `0x98a60` is unremarkable: `mmap(NULL, length, PROT_READ,
+MAP_SHARED, fd, 0)` with a `munmap` earlier in the same loop, the descriptor
+read from instance offset 16 and the length from offset 24. The descriptors are
+open and the sizes are plausible. The most likely reading is that fourteen of
+the sixteen modules never filled their buffers, and `writeFile` reports the
+consequence rather than the cause.
+
+`errno` would separate the remaining possibilities and the HAL does not print
+it. That is the next measurement.
+
+### Status
+
+The exposure ceiling remains unexplained. What is now excluded:
+
+- The 15 s completion budget is not the binding limit.
+- The LRI is not truncated by an interrupted write.
+- The buffers are not lost to address-space exhaustion.
+
+What is established independently of the failure: the timeout field at instance
+offset `0x24` is real, the formula predicting it holds on hardware, and it can
+be patched safely. The shim verifies the field against the predicted value
+before writing and refuses otherwise.

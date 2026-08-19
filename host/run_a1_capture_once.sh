@@ -13,8 +13,12 @@ CONFIRM_A1_ASYNC=--execute-fixed-a1-async-shim-20ms-once-and-reboot
 CONFIRM_ALL16=--execute-fixed-all16-20ms-once-and-reboot
 CONFIRM_ALL16_ASYNC=--execute-fixed-all16-async-shim-20ms-once-and-reboot
 CONFIRM_ALL16_HDR_ASYNC=--execute-fixed-all16-hdr-async-shim-1p25-5-20ms-once-and-reboot
+CONFIRM_TIMEOUT_PROBE=--execute-timeout-shim-all16-8s-once-and-reboot
+CONFIRM_TIMEOUT_PROBE_6S=--execute-timeout-shim-all16-6s-once-and-reboot
 EXPECTED_SHIM_SIZE=8904
 EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8
+EXPECTED_TIMEOUT_SHIM_SIZE=9904
+EXPECTED_TIMEOUT_SHIM_SHA1=243e6419be6c6e06e4cb21c5204c74339e79985f
 EXPECTED_AF_SHIM_SIZE=13764
 EXPECTED_AF_SHIM_SHA1=67647b71767ab2b68a214fae87578e24eb3433b2
 
@@ -23,6 +27,7 @@ REPO_ROOT=$(dirname "$SCRIPT_DIR")
 PAYLOAD="$REPO_ROOT/device/a1_capture_once.sh"
 ADB=${LIGHT_L16_ADB:-adb}
 ASYNC_SHIM_REQUIRED=no
+TIMEOUT_SHIM_REQUIRED=no
 AUTOFOCUS_REQUIRED=no
 A1_AF_SHIM_REQUIRED=no
 SHIM_LOCAL=
@@ -140,12 +145,49 @@ elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_ALL16_HDR_ASYNC" ]; then
     EXPECTED_EXPOSURE_COUNT=16
     EXPECTED_EXPOSURE_ORDER=A1,A2,A3,A4,A5,B1,B2,B3,B4,B5,C1,C2,C3,C4,C5,C6
     EXPECTED_EXPOSURE_PLAN=A1:1250000,A2:20000000,A3:5000000,A4:5000000,A5:20000000,B1:20000000,B2:5000000,B3:5000000,B4:1250000,B5:20000000,C1:20000000,C2:5000000,C3:5000000,C4:20000000,C5:1250000,C6:20000000
+elif [ "${1-}" = "$CONFIRM_TIMEOUT_PROBE" ]; then
+    [ "$#" -eq 1 ] || exit 2
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_timeout_probe_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_timeout_probe.result
+    REMOTE_ARM=/data/local/tmp/light_l16_timeout_probe.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_timeout_probe_run
+    REMOTE_SHIM=/data/local/tmp/liblcc_async_writer_shim.so
+    REMOTE_TIMEOUT_SHIM=/data/local/tmp/liblcc_async_timeout_shim.so
+    ARM_VALUE=TIMEOUT_PROBE_ALL16_8000000000NS_GAIN_1.0_ONCE
+    EXPECTED_MODE=TIMEOUT_PROBE_ALL16_8S_ONCE
+    OUTPUT_PREFIX=timeout-probe-all16-8s
+    POLL_LIMIT=300
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=no
+    TIMEOUT_SHIM_REQUIRED=yes
+    EXPECTED_EXPOSURE_COUNT=1
+    EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
+    EXPECTED_EXPOSURE_PLAN=selected:8000000000
+elif [ "${1-}" = "$CONFIRM_TIMEOUT_PROBE_6S" ]; then
+    [ "$#" -eq 1 ] || exit 2
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_timeout_probe_6s_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_timeout_probe_6s.result
+    REMOTE_ARM=/data/local/tmp/light_l16_timeout_probe_6s.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_timeout_probe_6s_run
+    REMOTE_SHIM=/data/local/tmp/liblcc_async_writer_shim.so
+    REMOTE_TIMEOUT_SHIM=/data/local/tmp/liblcc_async_timeout_shim.so
+    ARM_VALUE=TIMEOUT_PROBE_ALL16_6000000000NS_GAIN_1.0_ONCE
+    EXPECTED_MODE=TIMEOUT_PROBE_ALL16_6S_ONCE
+    OUTPUT_PREFIX=timeout-probe-all16-6s
+    POLL_LIMIT=300
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=no
+    TIMEOUT_SHIM_REQUIRED=yes
+    EXPECTED_EXPOSURE_COUNT=1
+    EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
+    EXPECTED_EXPOSURE_PLAN=selected:6000000000
 else
-    printf 'usage: %s {%s|%s|%s|%s|%s|%s|%s|%s}\n' \
+    printf 'usage: %s {%s|%s|%s|%s|%s|%s|%s|%s|%s|%s}\n' \
         "$0" "$CONFIRM_A1" "$CONFIRM_A1_CENTER_AF" \
         "$CONFIRM_A1_INLINE_AF" "$CONFIRM_A_GROUP_INLINE_AF" \
         "$CONFIRM_A1_ASYNC" "$CONFIRM_ALL16" "$CONFIRM_ALL16_ASYNC" \
-        "$CONFIRM_ALL16_HDR_ASYNC" >&2
+        "$CONFIRM_ALL16_HDR_ASYNC" "$CONFIRM_TIMEOUT_PROBE" \
+        "$CONFIRM_TIMEOUT_PROBE_6S" >&2
     printf 'Profiles perform one real lcc capture request. HDR uses fixed 1.25/5/20 ms module roles; AF, shim, and ALL16 profiles always reboot.\n' >&2
     exit 2
 fi
@@ -306,6 +348,20 @@ trap 'exit 143' TERM
     exit 1
 }
 
+if [ "$TIMEOUT_SHIM_REQUIRED" = "yes" ]; then
+    TIMEOUT_SHIM_LOCAL=${LIGHT_L16_TIMEOUT_SHIM:-}
+    [ -n "$TIMEOUT_SHIM_LOCAL" ] && [ -f "$TIMEOUT_SHIM_LOCAL" ] || {
+        printf 'set LIGHT_L16_TIMEOUT_SHIM to the reviewed ARM32 shim file\n' >&2
+        exit 1
+    }
+    HOST_TIMEOUT_SHIM_SHA1=$(sha1sum "$TIMEOUT_SHIM_LOCAL")
+    HOST_TIMEOUT_SHIM_SHA1=${HOST_TIMEOUT_SHIM_SHA1%% *}
+    [ "$HOST_TIMEOUT_SHIM_SHA1" = "$EXPECTED_TIMEOUT_SHIM_SHA1" ] || {
+        printf 'refusing unexpected timeout shim: %s\n' "$HOST_TIMEOUT_SHIM_SHA1" >&2
+        exit 1
+    }
+fi
+
 if [ "$ASYNC_SHIM_REQUIRED" = "yes" ]; then
     SHIM_LOCAL=${LIGHT_L16_ASYNC_SHIM:-}
     PROFILE_SHIM_SIZE=$EXPECTED_SHIM_SIZE
@@ -370,6 +426,18 @@ remove_remote_staging
 if [ -n "$SHIM_LOCAL" ]; then
     "$ADB" push "$SHIM_LOCAL" "$REMOTE_SHIM" >/dev/null
     "$ADB" shell "chmod 0600 '$REMOTE_SHIM'"
+fi
+if [ -n "${TIMEOUT_SHIM_LOCAL-}" ]; then
+    "$ADB" push "$TIMEOUT_SHIM_LOCAL" "$REMOTE_TIMEOUT_SHIM" >/dev/null
+    "$ADB" shell "chmod 0600 '$REMOTE_TIMEOUT_SHIM'"
+    DEVICE_TIMEOUT_SHIM_SHA1=$(
+        "$ADB" shell "toybox sha1sum '$REMOTE_TIMEOUT_SHIM'" | tr -d '\r'
+    )
+    DEVICE_TIMEOUT_SHIM_SHA1=${DEVICE_TIMEOUT_SHIM_SHA1%% *}
+    [ "$DEVICE_TIMEOUT_SHIM_SHA1" = "$EXPECTED_TIMEOUT_SHIM_SHA1" ] || {
+        printf 'refusing: staged timeout shim hash mismatch\n' >&2
+        exit 1
+    }
 fi
 
 HOST_SHA1=$(sha1sum "$PAYLOAD")
