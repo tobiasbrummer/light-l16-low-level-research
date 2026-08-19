@@ -524,3 +524,38 @@ def test_app_readme_states_the_plan_and_the_measured_status() -> None:
     assert "2026-08-18" in readme
     assert "24 of 24" in readme
     assert "could not measure" in readme
+
+
+def test_no_numeric_comparison_exceeds_the_device_shell_word_size() -> None:
+    """Android 6 on this camera is 32-bit; its shell overflows past ~2.1e9.
+
+    The host test harness runs a 64-bit shell and therefore cannot reproduce
+    this: the long-exposure profile passed every host check and was then
+    refused on the device, because $((29000000000)) evaluates to -1064771072
+    there and even a small left-hand value fails when the right-hand constant
+    overflows.  This check reads the comparisons statically instead.
+    """
+    import re
+
+    limit = 2**31 - 1
+    offenders = []
+    for path in (CHILD, ROOT / "device" / "dark_frame_series_hostless_supervisor.sh",
+                 ROOT / "device" / "dark_frame_long_series_hostless_supervisor.sh"):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue  # comments may quote the very example being guarded
+            for match in re.finditer(r"-(?:eq|ne|lt|le|gt|ge)\s+\"?(\d+)", line):
+                if int(match.group(1)) > limit:
+                    offenders.append(f"{path.name}:{number}: {line.strip()}")
+            for match in re.finditer(r"\[\s+\"?(\d+)\"?\s+-(?:eq|ne|lt|le|gt|ge)", line):
+                if int(match.group(1)) > limit:
+                    offenders.append(f"{path.name}:{number}: {line.strip()}")
+    assert not offenders, "32-bit overflow in shell arithmetic:\n" + "\n".join(offenders)
+
+
+def test_exposure_bounds_are_checked_by_digit_count() -> None:
+    text = CHILD.read_text(encoding="utf-8")
+    assert '[ "${#PLAN_EXPOSURE}" -ge 5 ]' in text
+    assert '[ "${#PLAN_EXPOSURE}" -le 11 ]' in text
+    # The exact values remain enforced by the per-profile whitelist.
+    assert "ALLOWED_EXPOSURES=" in text

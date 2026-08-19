@@ -129,17 +129,42 @@ def test_darkness_check_forces_the_worst_case_for_darkness() -> None:
     assert "sensitivityRange.getUpper()" in source
 
 
-def test_darkness_check_uses_a_fixed_threshold_and_frame_count() -> None:
+def test_darkness_check_thresholds_match_the_measured_calibration() -> None:
+    """Calibrated on the device: covered reads ~54-60, room light ~134.
+
+    The first version used 24 and 64, both of which sit below the covered
+    reading, so no amount of covering could pass.
+    """
     source = DARKNESS.read_text()
-    assert "DARK_MEAN_MAX_LUMA = 24" in source
-    assert "DARK_P999_MAX_LUMA = 64" in source
+    assert "DARK_MEAN_MAX_LUMA = 90" in source
+    assert "DARK_SPREAD_MAX_LUMA = 60" in source
     assert "REQUIRED_FRAMES = 8" in source
     assert "PROBE_EXPOSURE_NS = 100000000L" in source
 
 
+def test_darkness_check_measures_spread_not_absolute_highlight() -> None:
+    """p99.9 must be judged against the mean, not against a fixed level.
+
+    An absolute bound would re-measure overall brightness, which the mean
+    already covers.  What p99.9 adds is whether one bright patch sits in an
+    otherwise dark frame, and that is a question about spread.
+    """
+    source = DARKNESS.read_text()
+    assert "p999 - mean" in source or "spread" in source
+    assert "DARK_P999_MAX_LUMA" not in source
+    assert "spread_luma=" in source
+    assert "spread_luma_limit=" in source
+
+
 def test_darkness_check_reports_measured_values_next_to_the_limits() -> None:
     source = DARKNESS.read_text()
-    for key in ("mean_luma=", "p999_luma=", "mean_luma_limit=", "p999_luma_limit="):
+    for key in (
+        "mean_luma=",
+        "p999_luma=",
+        "spread_luma=",
+        "mean_luma_limit=",
+        "spread_luma_limit=",
+    ):
         assert key in source
 
 

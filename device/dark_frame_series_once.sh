@@ -215,8 +215,15 @@ validate_plan() {
         case "$PLAN_EXPOSURE" in
             ""|*[!0-9]*) fail invalid_plan_exposure_value ;;
         esac
-        [ "$PLAN_EXPOSURE" -ge 10000 ] || fail plan_exposure_below_10000ns
-        [ "$PLAN_EXPOSURE" -le 29981853000 ] || fail plan_exposure_above_sensor_ceiling
+        # Android 6 on this camera is 32-bit and its shell overflows on any
+        # decimal above about 2.1e9: $((29000000000)) evaluates to
+        # -1064771072, and even [ 20000000 -le 29981853000 ] is false
+        # because the right-hand constant overflows.  Nanosecond bounds
+        # therefore cannot be compared numerically at all.  Bound the digit
+        # count instead, which is exact for decimal strings, and let the
+        # compiled-in whitelist above enforce the individual values.
+        [ "${#PLAN_EXPOSURE}" -ge 5 ] || fail plan_exposure_below_10000ns
+        [ "${#PLAN_EXPOSURE}" -le 11 ] || fail plan_exposure_above_sensor_ceiling
         case " $ALLOWED_EXPOSURES " in
             *" $PLAN_EXPOSURE "*) ;;
             *) fail invalid_plan_exposure_value ;;

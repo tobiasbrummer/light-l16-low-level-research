@@ -163,7 +163,7 @@ the scatter between repeats beside it.
 
 ## Payload identity
 
-The current 24,046-byte child payload has SHA-1 `a5bbf8d92927f73ca596d63c995b7b5a0adec494`. The supervisor, the
+The current 24,542-byte child payload has SHA-1 `ea703a2514efc2bdf21b746c69eb367616f14931`. The supervisor, the
 Java source, and the build script each refuse a payload that does not match, so
 changing the plan requires deliberately updating every pin.
 

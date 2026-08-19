@@ -160,6 +160,6 @@ so no amount of covering could pass them.
 
 | Payload | Size | SHA-1 |
 | --- | ---: | --- |
-| `device/dark_frame_series_once.sh` | 24,046 | `a5bbf8d92927f73ca596d63c995b7b5a0adec494` |
+| `device/dark_frame_series_once.sh` | 24,542 | `ea703a2514efc2bdf21b746c69eb367616f14931` |
 | `device/dark_frame_series_hostless_supervisor.sh` | 13,596 | `e76430231963aa846dbd818406687f6bfabaa437` |
 | `liblcc_async_writer_shim.so` | 8,904 | `150e53a736624010dc7fb741490ea8dca7afbfb8` |

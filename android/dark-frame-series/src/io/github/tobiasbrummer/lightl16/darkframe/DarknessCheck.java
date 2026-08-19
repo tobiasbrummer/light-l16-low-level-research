@@ -41,11 +41,22 @@ public final class DarknessCheck {
         void onResult(boolean dark, String report);
     }
 
-    // Starting values on the 8-bit luma scale, not calibrated constants.  The
-    // report prints the measured values next to them so the first physical run
-    // shows how much margin the cover actually has.
-    private static final int DARK_MEAN_MAX_LUMA = 24;
-    private static final int DARK_P999_MAX_LUMA = 64;
+    // Calibrated on the device on 2026-08-18: a fully covered lens reads a
+    // mean luma of 54 to 60 at these settings, while a dimly lit evening room
+    // already reads 134.  That 134 is a lower bound for "uncovered", since a
+    // brighter room only moves it further from this limit.
+    //
+    // The first version used 24 and 64, both below the covered reading, so no
+    // amount of covering could pass.  At ISO 12800 the sensor's own noise
+    // floor occupies the lower half of the 8-bit range after gamma, which is
+    // why these limits look high for a "darkness" test.
+    private static final int DARK_MEAN_MAX_LUMA = 90;
+
+    // Judged against the mean rather than as an absolute level: the mean
+    // already answers "how bright is the frame", so what p99.9 adds is
+    // "is there one bright patch in an otherwise dark frame".  A covered lens
+    // measured a spread of about 31.
+    private static final int DARK_SPREAD_MAX_LUMA = 60;
     private static final int REQUIRED_FRAMES = 8;
     private static final long PROBE_EXPOSURE_NS = 100000000L;
     private static final long OVERALL_TIMEOUT_MS = 20000L;
@@ -325,15 +336,28 @@ public final class DarknessCheck {
         double mean = (double) lumaSum / (double) sampleCount;
         int p999 = percentile(0.999);
         int maximum = percentile(1.0);
+        double spread = p999 - mean;
         line("frames=" + frames);
         line("samples=" + sampleCount);
         line("mean_luma=" + String.format("%.3f", mean));
         line("p999_luma=" + p999);
         line("max_luma=" + maximum);
+        line("spread_luma=" + String.format("%.3f", spread));
         line("mean_luma_limit=" + DARK_MEAN_MAX_LUMA);
-        line("p999_luma_limit=" + DARK_P999_MAX_LUMA);
-        boolean dark = mean <= DARK_MEAN_MAX_LUMA && p999 <= DARK_P999_MAX_LUMA;
-        finish(dark, dark ? "lens_cover_confirmed" : "scene_not_dark_enough");
+        line("spread_luma_limit=" + DARK_SPREAD_MAX_LUMA);
+        boolean levelOk = mean <= DARK_MEAN_MAX_LUMA;
+        boolean spreadOk = spread <= DARK_SPREAD_MAX_LUMA;
+        String reason;
+        if (levelOk && spreadOk) {
+            reason = "lens_cover_confirmed";
+        } else if (!levelOk && !spreadOk) {
+            reason = "scene_too_bright_and_uneven";
+        } else if (!levelOk) {
+            reason = "scene_too_bright";
+        } else {
+            reason = "bright_patch_suggests_a_light_leak";
+        }
+        finish(levelOk && spreadOk, reason);
     }
 
     /** Percentile over the luma histogram; the p99.9 bound catches an edge
