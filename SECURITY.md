@@ -21,13 +21,23 @@ compatibility.
 - Do not execute recovered calibration, ASIC programming, or factory-init
   binaries.
 - The enabled host wrapper is valid only for the exact checked identities and
-  six compiled-in profiles documented in `docs/lcc-control.md`. Do not
-  generalize it, add another executable, suppress a profile's required
-  post-attempt normal reboot, or reuse it while a CameraService client exists.
-- The hostless app is narrower: fixed A1 at 20 ms and gain 1 only. Its root
-  supervisor must reboot after every possible camera attempt because there is
-  no independent host artifact pull. Do not remove its two-stage UI,
-  one-install lock, script hashes, outer timeout, or reboot fallback.
+  the compiled-in profiles documented in `docs/lcc-control.md`. Each profile
+  fixes its own mask, exposure, gain and arm token, and is refused unless the
+  payload and preload hashes match. Do not generalize it, add another
+  executable, suppress a profile's required post-attempt normal reboot, or
+  reuse it while a CameraService client exists.
+- The wrapper has no dry-run mode. It arms and triggers a real capture before
+  any host-side timeout can intervene, so an interrupted invocation still
+  leaves a capture running on the device.
+- The on-device apps are each narrower than the wrapper: one fixed profile,
+  no arguments, and a hash-pinned copy of the exact payload they were built
+  against. A root supervisor must reboot after every possible camera attempt
+  because there is no independent host artifact pull. Do not remove the
+  two-stage UI, one-install lock, script hashes, outer timeout, or reboot
+  fallback. An app built before a payload change carries the older payload;
+  rebuild it rather than assuming it matches this repository.
+- Long exposures are bounded by the firmware at 29 s. Requesting more is
+  rejected by the payload's own plan check rather than passed to the sensor.
 - Never test on a device you do not own or administer with permission.
 
 ## Reporting a problem

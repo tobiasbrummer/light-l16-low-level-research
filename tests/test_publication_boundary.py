@@ -1147,3 +1147,33 @@ def test_the_usage_line_offers_every_profile() -> None:
                             wrapper[wrapper.index("ALL_CONFIRMS="):]))
     assert defined, "no profiles found"
     assert defined <= listed, f"missing from usage: {sorted(defined - listed)}"
+
+
+def test_the_readme_quickstart_refers_to_things_that_exist() -> None:
+    """A first-time reader copies these lines verbatim.
+
+    The analysis command originally named a file where the tool takes a
+    directory, which fails immediately and is the worst possible first
+    impression for a repository asking to be trusted with someone's camera.
+    """
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    start = readme.index("## Getting started")
+    rest = readme[start + len("## Getting started"):]
+    end = rest.index("\n## ")
+    quickstart = rest[:end]
+
+    for script in re.findall(r"(?:sh|\./)\s*(host/[\w./-]+\.sh)", quickstart):
+        assert (ROOT / script).is_file(), f"{script} does not exist"
+
+    for module in re.findall(r"python -m ([\w.]+)", quickstart):
+        path = ROOT / (module.replace(".", "/") + ".py")
+        assert path.is_file(), f"{module} does not exist"
+        source = path.read_text(encoding="utf-8")
+        # Both analysers take a directory; the README must not promise a file.
+        assert 'add_argument("directory"' in source or "def main" in source
+
+    for flag in re.findall(r"(--execute-[\w-]+)", quickstart):
+        wrapper = (ROOT / "host" / "run_a1_capture_once.sh").read_text(
+            encoding="utf-8"
+        )
+        assert flag in wrapper, f"{flag} is not a wrapper profile"
