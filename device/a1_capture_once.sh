@@ -297,18 +297,18 @@ EXPECTED_PROG_APP_SIZE=159664
 EXPECTED_PROG_APP_SHA1=d6d74641759f2e208beac4318507ea1b71923db4
 EXPECTED_HAL_SIZE=1338100
 EXPECTED_HAL_SHA1=016602174e0635e79cda5566d5e850c1294a9300
-EXPECTED_SHIM_SIZE=8904
-EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8
+EXPECTED_SHIM_SIZE=9080
+EXPECTED_SHIM_SHA1=0b93dc17a2c4219943293d96b7edda39be61613d
 # Both builds come from the same source and occupy the same preload slot; the
 # profile decides which one is acceptable, and only these two are.
 case "$TIMEOUT_SHIM_VARIANT" in
     timeout_patch)
-        EXPECTED_TIMEOUT_SHIM_SIZE=9904
-        EXPECTED_TIMEOUT_SHIM_SHA1=243e6419be6c6e06e4cb21c5204c74339e79985f
+        EXPECTED_TIMEOUT_SHIM_SIZE=10084
+        EXPECTED_TIMEOUT_SHIM_SHA1=5f70d14966f58a148a631248c9f48ae4941122e4
         ;;
     mmap_probe)
-        EXPECTED_TIMEOUT_SHIM_SIZE=10152
-        EXPECTED_TIMEOUT_SHIM_SHA1=88eb6020327fc3776eeb4ab193fc4d1cb441dcbf
+        EXPECTED_TIMEOUT_SHIM_SIZE=10332
+        EXPECTED_TIMEOUT_SHIM_SHA1=7607f25b7dbc594536c982ca0a871ce2eb134389
         ;;
     *)
         printf 'unknown timeout shim variant: %s\n' "$TIMEOUT_SHIM_VARIANT" >&2
@@ -1171,18 +1171,49 @@ set -- "$@" -g "$GAIN"
 LCC_STATUS=$?
 printf 'lcc_returned=%s\n' "$LCC_STATUS"
 
+# The preload has two legitimate shapes.  Normally writeFile arrives first
+# and is moved to a worker that closeCamera joins.  Past roughly five seconds
+# of exposure lcc reaches closeCamera first, and the preload then runs the
+# write inline on the callback -- deliberately, because a worker started at
+# that point would map descriptors the teardown has already closed.  The
+# inline path produces no worker markers at all, so it is checked separately
+# rather than folded into one list.
+select_writer_markers() {
+    if /system/bin/toybox grep -q \
+        'L16_ASYNC_SHIM write_after_close_inline$' "$WORKDIR/lcc.txt"
+    then
+        WRITER_MARKERS='write_after_close_inline'
+        FORBIDDEN_WRITER_MARKERS='enqueue_ok worker_start close_wait'
+    else
+        WRITER_MARKERS='enqueue_ok worker_start worker_done_ok close_wait'
+        FORBIDDEN_WRITER_MARKERS='write_after_close_inline'
+    fi
+}
+
+# lcc does not always terminate its own lines, so a marker can share a line
+# with vendor output ("Request Thread StartingL16_ASYNC_SHIM timeout_patched").
+# Anchoring only at the end still identifies each marker uniquely -- none is a
+# suffix of another -- while anchoring at the start does not.
 if [ "$USE_ASYNC_SHIM" = "yes" ]; then
+    select_writer_markers
+    for FORBIDDEN in $FORBIDDEN_WRITER_MARKERS; do
+        if /system/bin/toybox grep -q \
+            "L16_ASYNC_SHIM $FORBIDDEN$" "$WORKDIR/lcc.txt"
+        then
+            fail "async_shim_marker_${FORBIDDEN}_unexpected_for_writer_path"
+        fi
+    done
     for MARKER in \
         loaded preload_cleared resolve_targets_ok preload_child_selftest_ok \
-        enqueue_ok worker_start worker_done_ok close_wait close_continue \
+        $WRITER_MARKERS close_continue \
         helper_commands_ok close_reports_ok
     do
         MARKER_COUNT=$(/system/bin/toybox grep -c \
-            "^L16_ASYNC_SHIM $MARKER$" "$WORKDIR/lcc.txt")
+            "L16_ASYNC_SHIM $MARKER$" "$WORKDIR/lcc.txt")
         [ "$MARKER_COUNT" = "1" ] || fail async_shim_marker_missing_or_repeated
     done
     if /system/bin/toybox grep -Eq \
-        '^L16_ASYNC_SHIM .*(error|failed|unexpected)' "$WORKDIR/lcc.txt"
+        'L16_ASYNC_SHIM .*(error|failed|unexpected)' "$WORKDIR/lcc.txt"
     then
         fail async_shim_reported_error
     fi
@@ -1199,17 +1230,25 @@ if [ "$USE_TIMEOUT_SHIM" = "yes" ]; then
     case "$TIMEOUT_SHIM_VARIANT" in
         mmap_probe)
             REQUIRED_MARKERS='loaded preload_cleared resolve_targets_ok preload_child_selftest_ok'
-            SHIM_ERROR_PATTERN='^L16_ASYNC_SHIM .*(error|not_patched)'
+            SHIM_ERROR_PATTERN='L16_ASYNC_SHIM .*(error|not_patched)'
             ;;
         *)
-            REQUIRED_MARKERS='loaded preload_cleared resolve_targets_ok preload_child_selftest_ok timeout_patched enqueue_ok worker_start worker_done_ok close_wait close_continue helper_commands_ok close_reports_ok'
-            SHIM_ERROR_PATTERN='^L16_ASYNC_SHIM .*(error|failed|not_patched)'
+            select_writer_markers
+            REQUIRED_MARKERS="loaded preload_cleared resolve_targets_ok preload_child_selftest_ok timeout_patched $WRITER_MARKERS close_continue helper_commands_ok close_reports_ok"
+            SHIM_ERROR_PATTERN='L16_ASYNC_SHIM .*(error|failed|not_patched)'
+            for FORBIDDEN in $FORBIDDEN_WRITER_MARKERS; do
+                if /system/bin/toybox grep -q \
+                    "L16_ASYNC_SHIM $FORBIDDEN$" "$WORKDIR/lcc.txt"
+                then
+                    fail "timeout_shim_marker_${FORBIDDEN}_unexpected_for_writer_path"
+                fi
+            done
             ;;
     esac
     for MARKER in $REQUIRED_MARKERS
     do
         MARKER_COUNT=$(/system/bin/toybox grep -c \
-            "^L16_ASYNC_SHIM $MARKER$" "$WORKDIR/lcc.txt")
+            "L16_ASYNC_SHIM $MARKER$" "$WORKDIR/lcc.txt")
         [ "$MARKER_COUNT" = "1" ] || fail "timeout_shim_marker_${MARKER}_count_${MARKER_COUNT}"
     done
     if /system/bin/toybox grep -Eq "$SHIM_ERROR_PATTERN" "$WORKDIR/lcc.txt"

@@ -157,3 +157,70 @@ def test_preload_moves_write_off_callback_and_joins_before_close(
     assert log.index("L16_ASYNC_SHIM helper_commands_ok") < log.index(
         "L16_ASYNC_SHIM close_reports_ok"
     )
+
+
+def _run_client(client: Path, shim: Path | None, tmp_path: Path,
+                *arguments: str) -> tuple[dict[str, int], str]:
+    environment = os.environ.copy()
+    environment["LD_LIBRARY_PATH"] = str(tmp_path)
+    environment["LD_BIND_NOW"] = "1"
+    if shim is not None:
+        environment["LD_PRELOAD"] = str(shim)
+    else:
+        environment.pop("LD_PRELOAD", None)
+    result = subprocess.run(
+        [str(client), *arguments],
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    return _values(result.stdout), result.stderr
+
+
+def test_a_write_arriving_after_close_stays_on_the_callback(
+    tmp_path: Path,
+) -> None:
+    """Going asynchronous is only safe while closeCamera can still wait.
+
+    lcc reaches closeCamera on its own schedule, derived from the exposure, so
+    beyond about five seconds it gets there before the result callback fires.
+    Handing writeFile to a worker at that point hands it to a thread nobody
+    joins: on the device it ran alongside the teardown and every buffer came
+    back EBADF, leaving 32 MB of a 260 MB frame.  The preload must recognise
+    the order and run the write inline, which is what happens with no preload
+    at all and is known to produce a complete capture.
+    """
+    shim, _mock, client = _compile_native_test(tmp_path)
+
+    # Without a preload the write happens inside closeCamera, before the
+    # teardown completes.  That is the behaviour to preserve.
+    baseline, _ = _run_client(client, None, tmp_path, "close-first")
+    assert baseline["wrote_after_teardown"] == 0
+    assert baseline["writer_other_thread"] == 0
+
+    values, log = _run_client(client, shim, tmp_path, "close-first")
+    assert values["writer_other_thread"] == 0, (
+        "writeFile must not be moved off the callback once close has run"
+    )
+    assert values["write_return"] == 0
+    assert "L16_ASYNC_SHIM write_after_close_inline" in log
+    assert "L16_ASYNC_SHIM enqueue_ok" not in log
+    # A completed inline write is a success.  The writer result is seeded to
+    # failure so that a missing write cannot pass, which means closeCamera has
+    # to read it after the real call rather than before.
+    assert "L16_ASYNC_SHIM close_reports_ok" in log
+    assert "L16_ASYNC_SHIM close_reports_error" not in log
+    assert values["close_return"] == 1
+    # The property the whole fix exists for: the write lands while the
+    # descriptors are still alive.
+    assert values["wrote_after_teardown"] == 0
+
+
+def test_the_normal_order_still_goes_asynchronous(tmp_path: Path) -> None:
+    """The fix must not disable the preload for the case it was written for."""
+    shim, _mock, client = _compile_native_test(tmp_path)
+    values, log = _run_client(client, shim, tmp_path)
+    assert values["writer_other_thread"] == 1
+    assert values["wrote_after_teardown"] == 0
+    assert "L16_ASYNC_SHIM enqueue_ok" in log
+    assert "L16_ASYNC_SHIM write_after_close_inline" not in log

@@ -32,9 +32,9 @@ def test_supervisor_pins_child_and_async_shim_sizes_and_hashes() -> None:
     child_sha1 = hashlib.sha1(CHILD.read_bytes()).hexdigest()
     assert f"EXPECTED_CHILD_SIZE={child_size}" in text
     assert f"EXPECTED_CHILD_SHA1={child_sha1}" in text
-    assert "EXPECTED_ASYNC_SHIM_SIZE=8904" in text
+    assert "EXPECTED_ASYNC_SHIM_SIZE=9080" in text
     assert (
-        "EXPECTED_ASYNC_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8"
+        "EXPECTED_ASYNC_SHIM_SHA1=0b93dc17a2c4219943293d96b7edda39be61613d"
         in text
     )
 

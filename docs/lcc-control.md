@@ -755,10 +755,10 @@ to the fixed `A1-A5` mask as the next still-unverified multi-module step.
 
 ## Device-side wrapper syntax
 
-The current 54,223-byte twelve-profile payload has host SHA-1:
+The current 55,993-byte twelve-profile payload has host SHA-1:
 
 ```text
-abdf88fce0025a2a1994198228373d0825c73ec5
+436ce97b6c1caf3fc5b7fbec8ff60eabf8802c33
 ```
 
 Its host shell syntax check and automated tests pass. The ninth and tenth
@@ -1413,6 +1413,38 @@ to 0), at the cost of more `Bad fd for extra data` (184 to 227). Both counts
 come from otherwise identical 20 ms all-16 runs. What it lacks is a case for
 `writeFile` arriving after `closeCamera`, where going asynchronous is exactly
 wrong and running on the callback is exactly right.
+
+### The repair, and the measurement that confirms it
+
+The writer now recognises the order. `closeCamera` records that it has been
+entered, and a `writeFile` arriving afterwards runs inline on the callback
+instead of on a worker -- which is what happens with no preload at all, and
+what completes. The log says which path was taken: `write_after_close_inline`
+instead of `enqueue_ok`.
+
+A second fault only surfaced on hardware. `closeCamera` read the writer's
+result *before* calling the real function, but with the order reversed the
+inline write happens during that call. The seed value is 1, meaning "no write
+happened", so a completed capture was reported as a failure: the first
+repaired run logged `write_after_close_inline` correctly and still ended in
+`Closed camera pipeline, 0`. The result is now read after the real call.
+
+Confirmed at 6 s with all sixteen modules and the writer active:
+
+```text
+L16_ASYNC_SHIM write_after_close_inline
+L16_ASYNC_SHIM close_reports_ok
+Closed camera pipeline, 1
+lri_output_size=259999993
+```
+
+The mock had to be sharpened before it could test any of this. It returned
+from `closeCamera` before `writeFile` was ever called, so both paths wrote
+after teardown and the distinction was invisible. It now fires the result
+callback from inside `closeCamera` and completes the teardown afterwards, as
+the HAL does, which separates the cases: an inline write lands before
+teardown, a worker after it. Disabling the fix makes that test fail, which is
+the only evidence that it tests anything.
 
 Also established, independently of all this: the timeout field at instance
 offset `0x24` is real, the formula predicting it holds on hardware, and it can

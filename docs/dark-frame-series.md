@@ -163,7 +163,7 @@ the scatter between repeats beside it.
 
 ## Payload identity
 
-The current 24,542-byte child payload has SHA-1 `ea703a2514efc2bdf21b746c69eb367616f14931`. The supervisor, the
+The current 24,542-byte child payload has SHA-1 `3cc7d997768acc0cb6c88de1f9acc8f686e04ffd`. The supervisor, the
 Java source, and the build script each refuse a payload that does not match, so
 changing the plan requires deliberately updating every pin.
 
@@ -177,8 +177,8 @@ term that made the short series' apparent slope uninterpretable. The 29 s point
 sits just below the 29.98 s ceiling Camera2 reports, and the per-capture timeout
 rises from 60 to 120 seconds.
 
-The packaged async writer shim is the reviewed 8,904-byte object with SHA-1
-`150e53a736624010dc7fb741490ea8dca7afbfb8`, which is reproducible only with
+The packaged async writer shim is the reviewed 9,080-byte object with SHA-1
+`0b93dc17a2c4219943293d96b7edda39be61613d`, which is reproducible only with
 LLD 20.1.8. A different linker version produces a different byte count, and the
 build refuses it rather than shipping an unreviewed object.
 

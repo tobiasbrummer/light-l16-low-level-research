@@ -152,8 +152,8 @@ attempted.
 
 The live profile uses the reversible async writer shim because the prior
 all-16 test showed that synchronous LRI writing exhausted the metadata pool.
-It still requires the exact reviewed 8,904-byte ARM32 shim with SHA-1
-`150e53a736624010dc7fb741490ea8dca7afbfb8`.
+It still requires the exact reviewed 9,080-byte ARM32 shim with SHA-1
+`0b93dc17a2c4219943293d96b7edda39be61613d`.
 
 Before a live run:
 

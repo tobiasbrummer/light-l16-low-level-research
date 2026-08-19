@@ -82,10 +82,10 @@ public final class CaptureActivity extends Activity {
         "liblcc_a1_focus_capture_shim.so";
     private static final long EXPECTED_SUPERVISOR_SIZE = 17301L;
     private static final String EXPECTED_SUPERVISOR_SHA256 =
-        "0b1375f406b48987fe77f74b8b0c6612fe1bf5018794f26a8d9646397b92c9b9";
+        "9fc456975de0992618f304d2606fe3e2fbb74e60359785b559ad8825525633fb";
     private static final long EXPECTED_CHILD_SIZE = 40130L;
     private static final String EXPECTED_CHILD_SHA256 =
-        "edb26ddd7894e5913204cadf2d2176802ef10de3e79018a37896182cd6256311";
+        "a3df7398e2c54f631a555e9b8754f5048e83ef3712379a23681ca4f8f0e71e47";
     private static final long EXPECTED_AF_SHIM_SIZE = 13764L;
     private static final String EXPECTED_AF_SHIM_SHA256 =
         "72d1d05a6966cafbf92b7b5b45b82243d24da1a35a18b734097196357dc59ad6";

@@ -13,6 +13,12 @@ static pthread_t caller_thread;
 static pthread_t writer_thread;
 static int write_finished;
 static int close_observed_finished;
+/* On the device the descriptors writeFile maps belong to the pipeline that
+ * closeCamera tears down.  Writing after that returns EBADF on every buffer,
+ * so the model records the ordering violation rather than the symptom. */
+static int teardown_finished;
+static int wrote_after_teardown;
+static int close_invokes_write;
 static int write_return;
 static int close_return;
 static int64_t callback_microseconds;
@@ -37,6 +43,9 @@ int mock_write_file(void *self)
     (void)self;
     writer_thread = pthread_self();
     (void)nanosleep(&delay, 0);
+    if (teardown_finished) {
+        wrote_after_teardown = 1;
+    }
     write_finished = 1;
     return 0;
 }
@@ -49,6 +58,14 @@ int mock_close_camera(void *self)
 {
     (void)self;
     close_observed_finished = write_finished;
+    if (close_invokes_write) {
+        /* The real closeCamera is still inside the pipeline when the result
+         * callback fires, and the descriptors stay valid until it returns.
+         * A write that runs here is safe; one that runs on a worker is still
+         * going when the teardown below completes. */
+        write_return = mock_write_file(self);
+    }
+    teardown_finished = 1;
     return 1;
 }
 
@@ -72,6 +89,47 @@ int mock_run_capture(void)
     callback_microseconds = elapsed_microseconds(start, after_callback);
     total_microseconds = elapsed_microseconds(start, after_close);
     return close_return;
+}
+
+
+/* lcc reaches closeCamera on its own schedule -- thread_time_out, derived
+ * from the exposure -- so for a long exposure it gets there before the result
+ * callback has fired.  This is that order. */
+__attribute__((visibility("default")))
+int mock_run_capture_close_first(void)
+{
+    struct timespec start;
+    struct timespec after_close;
+    struct timespec after_write;
+    int fake_lcc_object;
+
+    write_finished = 0;
+    close_observed_finished = 0;
+    teardown_finished = 0;
+    wrote_after_teardown = 0;
+    close_invokes_write = 1;
+    caller_thread = pthread_self();
+    (void)clock_gettime(CLOCK_MONOTONIC, &start);
+    close_return = mock_close_camera(&fake_lcc_object);
+    (void)clock_gettime(CLOCK_MONOTONIC, &after_close);
+    close_invokes_write = 0;
+    /* Give a worker, if one was started, the time it needs to finish, so the
+     * ordering it produced is observable rather than a race in the test. */
+    {
+        const struct timespec settle = {1, 0};
+        (void)nanosleep(&settle, 0);
+    }
+    (void)clock_gettime(CLOCK_MONOTONIC, &after_write);
+    callback_microseconds = elapsed_microseconds(start, after_close);
+    total_microseconds = elapsed_microseconds(start, after_write);
+    return close_return;
+}
+
+
+__attribute__((visibility("default")))
+int mock_wrote_after_teardown(void)
+{
+    return wrote_after_teardown;
 }
 
 

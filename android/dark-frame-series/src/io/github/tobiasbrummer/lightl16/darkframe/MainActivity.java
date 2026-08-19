@@ -79,13 +79,13 @@ public final class MainActivity extends Activity {
         "liblcc_async_writer_shim.so";
     private static final long EXPECTED_SUPERVISOR_SIZE = 13596L;
     private static final String EXPECTED_SUPERVISOR_SHA256 =
-        "d00f768fa35fc6e9574983fe256d7735fa34cfef968ba8144ff9871d71d07acf";
+        "c21385cc3b83f5e0abc342871916b3ad14e7f47b7f2120debedba1fd25847aad";
     private static final long EXPECTED_CHILD_SIZE = 24542L;
     private static final String EXPECTED_CHILD_SHA256 =
-        "a2ce78994b95ff4fd4880d94c50916b8f86ec248b086d74f9901b96e80194967";
-    private static final long EXPECTED_ASYNC_SHIM_SIZE = 8904L;
+        "1ee205c65f56dec9291f5c188690dc9023e5eff6459af54c2edeb6dbc7127ff1";
+    private static final long EXPECTED_ASYNC_SHIM_SIZE = 9080L;
     private static final String EXPECTED_ASYNC_SHIM_SHA256 =
-        "bbc6865374dfd7beb72d4a1cc30fad81414c6915052eb22e35c5205574ae9cb5";
+        "f2da28cefc60027a884680ee9f4d0bf1966555982c7cacc9dda17ea65fa2be2b";
     private static final String ARM_VALUE =
         "L16_HOSTLESS_DARK_FRAME_SERIES_SUPERVISOR_ONCE_V1";
     private static final String SPENT_VALUE =

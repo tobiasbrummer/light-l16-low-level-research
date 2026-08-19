@@ -223,8 +223,8 @@ L16_LLD=/absolute/path/to/ld.lld \
 
 The reviewed build used Ubuntu Clang and LLD 20.1.8. With those versions, the
 expected output is 8,904 bytes, SHA-1
-`150e53a736624010dc7fb741490ea8dca7afbfb8`, and SHA-256
-`bbc6865374dfd7beb72d4a1cc30fad81414c6915052eb22e35c5205574ae9cb5`.
+`0b93dc17a2c4219943293d96b7edda39be61613d`, and SHA-256
+`f2da28cefc60027a884680ee9f4d0bf1966555982c7cacc9dda17ea65fa2be2b`.
 The device supervisor accepts only that exact size and SHA-1. Different
 toolchain output must be audited and deliberately updated rather than accepted
 through an override.

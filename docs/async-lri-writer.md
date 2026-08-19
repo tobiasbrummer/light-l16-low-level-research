@@ -267,10 +267,10 @@ L16_LLD=/path/to/ld.lld \
   /absolute/output/liblcc_async_writer_shim.so
 ```
 
-Using Ubuntu Clang and LLD 20.1.8 produced an 8,904-byte ARMv7/Thumb-2,
+Using Ubuntu Clang and LLD 20.1.8 produced an 9,080-byte ARMv7/Thumb-2,
 soft-float EABI shared object with SHA-1
-`150e53a736624010dc7fb741490ea8dca7afbfb8`, SHA-256
-`bbc6865374dfd7beb72d4a1cc30fad81414c6915052eb22e35c5205574ae9cb5`,
+`0b93dc17a2c4219943293d96b7edda39be61613d`, SHA-256
+`f2da28cefc60027a884680ee9f4d0bf1966555982c7cacc9dda17ea65fa2be2b`,
 and GNU build ID `0151acd49bc0ace82b96b6be770fdc1352768021`. It has no
 `DT_NEEDED` entry. Its imports are the documented Bionic loader, environment,
 process, thread, and write primitives; its only exports are the two target

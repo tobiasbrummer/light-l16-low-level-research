@@ -318,8 +318,8 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "HAL_SOURCE=/system/lib/hw/camera.msm8996.so" in text
     assert "EXPECTED_HAL_SIZE=1338100" in text
     assert "EXPECTED_HAL_SHA1=016602174e0635e79cda5566d5e850c1294a9300" in text
-    assert "EXPECTED_SHIM_SIZE=8904" in text
-    assert "EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8" in text
+    assert "EXPECTED_SHIM_SIZE=9080" in text
+    assert "EXPECTED_SHIM_SHA1=0b93dc17a2c4219943293d96b7edda39be61613d" in text
     assert "LD_PRELOAD=$1; export LD_PRELOAD; shift; exec \"$@\"" in text
     for marker in (
         "loaded",
@@ -390,9 +390,9 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
     assert "PASS_REBOOT_REQUIRED=yes" in supervisor_text
     assert "LIGHT_L16_ASYNC_SHIM" in supervisor_text
     assert "LIGHT_L16_A1_AF_SHIM" in supervisor_text
-    assert "EXPECTED_SHIM_SIZE=8904" in supervisor_text
+    assert "EXPECTED_SHIM_SIZE=9080" in supervisor_text
     assert (
-        "EXPECTED_SHIM_SHA1=150e53a736624010dc7fb741490ea8dca7afbfb8"
+        "EXPECTED_SHIM_SHA1=0b93dc17a2c4219943293d96b7edda39be61613d"
         in supervisor_text
     )
     assert "async PASS lacks verified shim runtime markers" in supervisor_text
@@ -578,10 +578,10 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
 
             command = args[1]
             if "wc -c < '/data/local/tmp/liblcc_async_writer_shim.so'" in command:
-                print("8904")
+                print("9080")
                 raise SystemExit(0)
             if "sha1sum '/data/local/tmp/liblcc_async_writer_shim.so'" in command:
-                print("150e53a736624010dc7fb741490ea8dca7afbfb8  shim")
+                print("0b93dc17a2c4219943293d96b7edda39be61613d  shim")
                 raise SystemExit(0)
             if "wc -c < '/data/local/tmp/liblcc_a1_focus_capture_shim.so'" in command:
                 print("13764")
@@ -656,7 +656,7 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
     fake_adb.chmod(0o755)
 
     fake_shim = tmp_path / "liblcc_async_writer_shim.so"
-    fake_shim.write_bytes(bytes(8904))
+    fake_shim.write_bytes(bytes(9080))
     fake_af_shim = tmp_path / "liblcc_a1_focus_capture_shim.so"
     fake_af_shim.write_bytes(bytes(13764))
     fake_sha1sum = tmp_path / "sha1sum"
@@ -673,7 +673,7 @@ def test_host_capture_supervisor_enforces_profile_specific_reboot_policy(
             shim = os.path.realpath(os.environ.get("FAKE_SHIM_PATH", ""))
             af_shim = os.path.realpath(os.environ.get("FAKE_AF_SHIM_PATH", ""))
             if target == shim:
-                digest = "150e53a736624010dc7fb741490ea8dca7afbfb8"
+                digest = "0b93dc17a2c4219943293d96b7edda39be61613d"
             elif target == af_shim:
                 digest = "67647b71767ab2b68a214fae87578e24eb3433b2"
             else:
@@ -1062,11 +1062,29 @@ def test_every_wrapper_profile_sets_the_variables_the_report_prints() -> None:
     """
     wrapper = (ROOT / "host" / "run_a1_capture_once.sh").read_text(encoding="utf-8")
     head, _, _ = wrapper.partition("\nRUN_STAMP=")
-    branches = re.split(r'\n(?:el)?if \[ "\$#" -eq 1 \] && \[ "\$1" = ', head)[1:]
+    parts = re.split(r'\n(?:el)?if \[ "\$#" -eq 1 \] && \[ "\$1" = ', head)
+    preamble, branches = parts[0], parts[1:]
     assert len(branches) >= 12
-    required = ("PROFILE=", "EXPECTED_MODE=", "OUTPUT_PREFIX=", "ARM_VALUE=",
-                "REMOTE_PAYLOAD=", "POLL_LIMIT=")
+    # A variable initialised before the branches has a safe default, so a
+    # branch may leave it alone.  PROFILE and PROFILE_LABEL have no default,
+    # which is exactly why omitting them aborted the wrapper.
+    defaulted = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", preamble, re.M))
+    assigned = {}
     for branch in branches:
-        name = branch.split("\"", 1)[0]
-        for variable in required:
-            assert variable in branch, f"{name} does not set {variable}"
+        # The branch text starts at the opening quote of the confirm variable.
+        name = branch.split("\"")[1]
+        assigned[name] = set(re.findall(r"^\s{4}([A-Z][A-Z0-9_]*)=", branch, re.M))
+
+    # Rather than list the variables by hand -- the list is what was wrong --
+    # take anything most branches set as required of all of them.  Genuinely
+    # profile-specific settings appear in only a few and stay out of it.
+    counts = {}
+    for names in assigned.values():
+        for variable in names:
+            counts[variable] = counts.get(variable, 0) + 1
+    common = {v for v, n in counts.items()
+              if n > len(branches) // 2 and v not in defaulted}
+    assert "PROFILE_LABEL" in common and "PROFILE" in common
+    for name, names in assigned.items():
+        missing = sorted(common - names)
+        assert not missing, f"{name} does not set {', '.join(missing)}"

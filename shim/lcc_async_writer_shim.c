@@ -291,6 +291,9 @@ typedef int (*l16_close_camera_fn)(void *self);
 static int l16_state = L16_IDLE;
 static int l16_thread_valid;
 static int l16_join_claimed;
+/* Set once closeCamera has been entered.  After that there is nobody left to
+ * join a writer thread, so writeFile must stay on the callback. */
+static int l16_close_entered;
 static int l16_protocol_error;
 static int l16_writer_result = 1;
 static int l16_helper_calls;
@@ -591,6 +594,22 @@ int l16_interposed_write_file(void *self)
         return 0;
     }
 
+    /* lcc reaches closeCamera on a schedule derived from the exposure, so
+     * past roughly five seconds it gets there before this callback fires.
+     * A worker started now would run beside the teardown and map descriptors
+     * it has already closed -- on the device that returned EBADF for every
+     * buffer and left 32 MB of a 260 MB frame.  Running inline is what
+     * happens with no preload at all, and that completes. */
+    if (__atomic_load_n(&l16_close_entered, __ATOMIC_ACQUIRE) != 0) {
+        int inline_result = l16_real_write(self);
+
+        __atomic_store_n(&l16_writer_result, inline_result != 0,
+                         __ATOMIC_RELEASE);
+        __atomic_store_n(&l16_state, L16_DONE, __ATOMIC_RELEASE);
+        L16_LOG("write_after_close_inline");
+        return inline_result;
+    }
+
     create_result = pthread_create(
         &l16_thread,
         (const void *)0,
@@ -618,6 +637,8 @@ int l16_interposed_close_camera(void *self)
     int helper_calls;
     int helper_failures;
 
+    __atomic_store_n(&l16_close_entered, 1, __ATOMIC_RELEASE);
+
     if (__atomic_load_n(&l16_thread_valid, __ATOMIC_ACQUIRE) != 0 &&
         __atomic_exchange_n(&l16_join_claimed, 1, __ATOMIC_ACQ_REL) == 0) {
         L16_LOG("close_wait");
@@ -628,7 +649,6 @@ int l16_interposed_close_camera(void *self)
         __atomic_store_n(&l16_thread_valid, 0, __ATOMIC_RELEASE);
     }
 
-    writer_result = __atomic_load_n(&l16_writer_result, __ATOMIC_ACQUIRE);
     if (join_result != 0) {
         /* Never tear down the HAL while worker completion is uncertain. */
         L16_LOG("close_reports_error");
@@ -643,6 +663,12 @@ int l16_interposed_close_camera(void *self)
 
     L16_LOG("close_continue");
     close_result = real_close(self);
+    /* Read after the real call, not before it.  When lcc reaches closeCamera
+     * first, the write runs inline while real_close is still inside the HAL,
+     * so a value read earlier would be the initial one -- which is 1, meaning
+     * "no write happened", and would report a failure for a capture that
+     * actually completed. */
+    writer_result = __atomic_load_n(&l16_writer_result, __ATOMIC_ACQUIRE);
     helper_calls = __atomic_load_n(&l16_helper_calls, __ATOMIC_ACQUIRE);
     helper_failures = __atomic_load_n(&l16_helper_failures, __ATOMIC_ACQUIRE);
     if (helper_calls == L16_EXPECTED_HELPER_COMMANDS && helper_failures == 0) {

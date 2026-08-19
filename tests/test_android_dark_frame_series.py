@@ -36,9 +36,9 @@ def test_app_pins_supervisor_child_and_shim_sizes_and_hashes() -> None:
     assert digest(SUPERVISOR, "sha256") in source
     assert f"EXPECTED_CHILD_SIZE = {CHILD.stat().st_size}L" in source
     assert digest(CHILD, "sha256") in source
-    assert "EXPECTED_ASYNC_SHIM_SIZE = 8904L" in source
+    assert "EXPECTED_ASYNC_SHIM_SIZE = 9080L" in source
     assert (
-        "bbc6865374dfd7beb72d4a1cc30fad81414c6915052eb22e35c5205574ae9cb5"
+        "f2da28cefc60027a884680ee9f4d0bf1966555982c7cacc9dda17ea65fa2be2b"
         in source
     )
 
@@ -217,10 +217,10 @@ def test_main_activity_requests_the_camera_permission_at_runtime() -> None:
 
 
 BUILD = APP / "build_debug_apk.sh"
-EXPECTED_ASYNC_SHIM_SIZE = 8904
-EXPECTED_ASYNC_SHIM_SHA1 = "150e53a736624010dc7fb741490ea8dca7afbfb8"
+EXPECTED_ASYNC_SHIM_SIZE = 9080
+EXPECTED_ASYNC_SHIM_SHA1 = "0b93dc17a2c4219943293d96b7edda39be61613d"
 EXPECTED_ASYNC_SHIM_SHA256 = (
-    "bbc6865374dfd7beb72d4a1cc30fad81414c6915052eb22e35c5205574ae9cb5"
+    "f2da28cefc60027a884680ee9f4d0bf1966555982c7cacc9dda17ea65fa2be2b"
 )
 
 
