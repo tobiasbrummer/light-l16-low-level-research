@@ -52,6 +52,29 @@ extern char **environ;
 
 
 #define L16_WRITE_SYMBOL "_ZN7qcamera12LccInterface9writeFileEv"
+#ifdef L16_TIMEOUT_PATCH_SECONDS
+/* Optional second job: raise the capture-completion budget.
+ *
+ * openCamera derives it from its third argument and stores it at instance
+ * offset 0x24 (str r3, [r4, #0x24] at 0x97f54); only closeCamera reads it,
+ * as the deadline for the pipeline to finish.  The budget is flat at 15 s
+ * below 9 s and grows slower than the work above it.
+ *
+ * That was expected to explain the roughly six-second exposure ceiling.  It
+ * does not.  A 6 s all-16 capture with this patch active -- verified applied,
+ * 180 s instead of 15 s -- failed exactly as it does without it, and produced
+ * no more data.  The real failure is seventeen of twenty buffers failing to
+ * mmap in writeFile; see docs/lcc-control.md.  The patch is kept because the
+ * offset and the formula are confirmed on hardware and it reproduces that
+ * negative result, not because it lifts the ceiling.
+ *
+ * This lives here rather than in a second preload because two preloads each
+ * run their own child self-test, and the extra system() call breaks the
+ * helper-command count this shim verifies.
+ */
+#define L16_OPEN_SYMBOL "_ZN7qcamera12LccInterface10openCameraEjhj"
+#define L16_TIMEOUT_OFFSET 0x24
+#endif
 #define L16_CLOSE_SYMBOL "_ZN7qcamera12LccInterface11closeCameraEv"
 
 #ifndef L16_TARGET_LIBRARY
@@ -82,6 +105,15 @@ enum l16_writer_state {
     L16_DONE = 2,
 };
 
+#ifdef L16_TIMEOUT_PATCH_SECONDS
+typedef int (*l16_open_camera_fn)(
+    void *self,
+    unsigned int first,
+    unsigned char second,
+    unsigned int third
+);
+#endif
+
 typedef int (*l16_write_file_fn)(void *self);
 typedef int (*l16_close_camera_fn)(void *self);
 
@@ -96,10 +128,24 @@ static int l16_clean_environment_ready;
 static pthread_t l16_thread;
 static void *l16_job_self;
 static void *l16_target_handle;
+#ifdef L16_TIMEOUT_PATCH_SECONDS
+static l16_open_camera_fn l16_real_open_camera;
+static int l16_timeout_patched;
+#endif
 static l16_write_file_fn l16_real_write;
 static l16_close_camera_fn l16_real_close;
 static char *l16_clean_environment[L16_MAX_ENVIRONMENT_ENTRIES];
 
+
+#ifdef L16_TIMEOUT_PATCH_SECONDS
+__attribute__((visibility("default")))
+int l16_interposed_open_camera(
+    void *self,
+    unsigned int first,
+    unsigned char second,
+    unsigned int third
+) __asm__(L16_OPEN_SYMBOL);
+#endif
 
 __attribute__((visibility("default")))
 int l16_interposed_write_file(void *self)
@@ -218,6 +264,22 @@ static int l16_resolve_targets(void)
         return 1;
     }
 
+#ifdef L16_TIMEOUT_PATCH_SECONDS
+    {
+        union l16_open_cast {
+            void *object;
+            l16_open_camera_fn function;
+        } open_symbol;
+
+        open_symbol.object = dlsym(l16_target_handle, L16_OPEN_SYMBOL);
+        l16_real_open_camera = open_symbol.function;
+        if (l16_real_open_camera == (l16_open_camera_fn)0 ||
+            l16_real_open_camera == l16_interposed_open_camera) {
+            L16_LOG("open_camera_resolve_failed");
+            return 1;
+        }
+    }
+#endif
     write_symbol.object = dlsym(l16_target_handle, L16_WRITE_SYMBOL);
     close_symbol.object = dlsym(l16_target_handle, L16_CLOSE_SYMBOL);
     l16_real_write = write_symbol.function;
@@ -288,6 +350,49 @@ static void l16_shim_loaded(void)
     __atomic_store_n(&l16_helper_failures, 0, __ATOMIC_RELEASE);
 }
 
+
+#ifdef L16_TIMEOUT_PATCH_SECONDS
+int l16_interposed_open_camera(
+    void *self,
+    unsigned int first,
+    unsigned char second,
+    unsigned int third
+)
+{
+    volatile unsigned int *field;
+    unsigned int expected_timeout;
+    int result;
+
+    if (l16_real_open_camera == (l16_open_camera_fn)0 || self == (void *)0) {
+        L16_LOG("open_camera_precondition_failed");
+        __atomic_store_n(&l16_protocol_error, 1, __ATOMIC_RELEASE);
+        return -1;
+    }
+
+    /* The return value is not a success flag: lcc continues past a nonzero
+     * result, so the field itself is the evidence that openCamera ran. */
+    result = l16_real_open_camera(self, first, second, third);
+
+    field = (volatile unsigned int *)((char *)self + L16_TIMEOUT_OFFSET);
+    expected_timeout = third > 9u ? third + 5u : 15u;
+    if (*field != expected_timeout) {
+        /* Offset moved, or the value is no longer derived this way.  Writing
+         * anyway would clobber an unknown member. */
+        L16_LOG("timeout_field_unexpected_not_patched");
+        __atomic_store_n(&l16_protocol_error, 1, __ATOMIC_RELEASE);
+        return result;
+    }
+    *field = (unsigned int)L16_TIMEOUT_PATCH_SECONDS;
+    if (*field != (unsigned int)L16_TIMEOUT_PATCH_SECONDS) {
+        L16_LOG("timeout_write_did_not_stick");
+        __atomic_store_n(&l16_protocol_error, 1, __ATOMIC_RELEASE);
+        return result;
+    }
+    l16_timeout_patched = 1;
+    L16_LOG("timeout_patched");
+    return result;
+}
+#endif
 
 int l16_interposed_write_file(void *self)
 {
