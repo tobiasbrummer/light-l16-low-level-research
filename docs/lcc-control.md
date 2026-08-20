@@ -755,10 +755,10 @@ to the fixed `A1-A5` mask as the next still-unverified multi-module step.
 
 ## Device-side wrapper syntax
 
-The current 57,260-byte thirteen-profile payload has host SHA-1:
+The current 61,800-byte fifteen-profile payload has host SHA-1:
 
 ```text
-ad8c78eed6dbd188682dd8cf273beb31e86abc12
+9ea68ed71d9354b43aacf6f19b5c959baea93221
 ```
 
 Its host shell syntax check and automated tests pass. The ninth and tenth
@@ -792,7 +792,11 @@ no lens timeout. Its matching supervisor TXT also verifies the expected payload
 and shim hashes, focused-lock result, zero LCC exit, complete cleanup, settled
 services and camera clients, identical LRI size/SHA-1, and intended normal
 reboot. The seventh profile's exact per-module HDR exposure
-assignment also remains unexecuted. The thirteenth profile requests 29 s, which the sensor clamps to 19.45 s; it is the firmware's
+assignment also remains unexecuted. The fifteenth profile takes no picture at all: it reads LCC command 0x0D,
+the defect-correction setting, using only the read direction of a word whose
+layout comes from lcc's own debug symbols. The fourteenth profile is A1 alone at 19,450,000,000 ns -- the longest
+request that is not clamped, and above the threshold that leaves sensor
+defect correction off. The thirteenth profile requests 29 s, which the sensor clamps to 19.45 s; it is the firmware's
 stated ceiling and the first exposure where the HAL derives T+5 instead of
 its flat 15 s. The twelfth profile is the control for both: the same 6 s capture with no
 preload at all. The eleventh profile repeats the 6 s capture with the mmap-failure probe in
@@ -1502,3 +1506,129 @@ offset `0x24` is real, the formula predicting it holds on hardware, and it can
 be patched safely. The shim verifies the field against the predicted value
 before writing and refuses otherwise. It simply does not lift the ceiling,
 because the ceiling was never its clock.
+
+
+## The LCC command encoding, from lcc's own debug symbols
+
+`/system/etc/lcc` carries DWARF, so the passthrough protocol can be read out
+rather than guessed. Every piece below comes from the binary itself.
+
+### Command words
+
+`hal_lcc_cmd_info_t` is a 32-bit bitfield:
+
+```text
+bits  0-7   cmd          bit 17  ucid
+bits  8-14  base         bit 18  read
+bit  15     intr         bit 19  write
+bit  16     m_bitmask    bit 20  bypass
+                         bits 24-31  size (response payload bytes)
+```
+
+The whitelist is a 72-entry table at `0x620c`. Its address and length are not
+inferred: `parse_passthough_cmd` walks it with `cmp r8, #72` and matches
+`(entry & 0xFF) == arg[2]` followed by `((entry >> 8) & 0x7F) == arg[3]`.
+
+Each command appears **twice**, once per direction:
+
+```text
+0x04310015   cmd 0x15, base 0x00, size 4   write
+0x02080215   cmd 0x15, base 0x02, size 2   read
+0x011B000D   cmd 0x0D, base 0x00, size 1   read+write
+0x0208020D   cmd 0x0D, base 0x02, size 2   read
+```
+
+So `base` selects the direction, and `size` is the number of payload bytes in
+the reply. This is confirmed by the readiness request this repository has been
+issuing all along: `-p 12 34 15 02` selects `0x02080215`, and the answer is
+`01 00` -- exactly the two bytes `size` promises.
+
+### `-p` argument order
+
+`parse_passthough_cmd` requires at least four arguments, each at most two hex
+digits, and converts them with `strtol(..., 16)`. It then stores two 16-bit
+values into the command structure:
+
+```text
+arg[0] | arg[1] << 8   ->  lcc_cmd.tid   (offset 42)
+arg[2] | arg[3] << 8   ->  lcc_cmd.cmd   (offset 44)
+```
+
+`cmd` is therefore a 16-bit value whose high byte is `base`: `0x020D` reads the
+defect-correction command, `0x000D` writes it.
+
+### The command structure
+
+`_cmd_info_t`, 88 bytes, taken from DWARF in full:
+
+```text
+  0  verbose              char
+  4  i2c_master_channel   int        (-m)
+  8  i2c_slave_address    int        (-s)
+ 12  i2c_mode             int        I2C_READ_MODE=0, I2C_WRITE_MODE=1
+ 16  write_driver         char *
+ 20  read_driver          char *
+ 24  passthrough.len      int
+ 28  passthrough.param    char **
+ 32  lcc_cmd.action/global/intr/m_bitmask
+ 36  lcc_cmd.data         char **
+ 40  lcc_cmd.len          uint16
+ 42  lcc_cmd.tid          uint16
+ 44  lcc_cmd.cmd          uint16
+ 46  lcc_cmd.ucid         uint16
+ 48  lcc_cmd.m_number     uint8
+ 68  flow_info
+ 80  command_type         int        PASSTHROUGH=0, WORKFLOW=1
+ 84  print_header         _Bool
+```
+
+### The transport is sysfs
+
+`write_driver` and `read_driver` point at files:
+
+```text
+/sys/class/i2c-adapter/i2c-11/11-0010/i2c_w    i2c_br
+                                       cci0_w   cci0_br
+                                       cci1_w   cci1_br
+```
+
+The passthrough is a formatted write to one file and a read from another. Two
+of the sibling attributes can be read without root and answer passively:
+
+```text
+i2c_slave_addr   Asic slave address is 0x20 , asic_reg_addr is 0x0
+i2c_reg_type     asic_reg_type is MSM_CAMERA_I2C_WORD_ADDR
+```
+
+So `-s 0` is an index, not the address; the ASIC sits at 0x20 with word
+register addressing.
+
+`streaming`, `camera_enable` and `camera_mclk_enable` return an I/O error when
+read, which is itself the warning: reading these attributes runs driver code.
+Reading `i2c_br` would issue a real bus transfer, so it is not observation and
+falls under the raw-I2C prohibition in SECURITY.md. Going through `lcc` keeps
+the whitelist between us and the bus, and that is the route this project uses.
+
+### What the defect-correction command does not do yet
+
+`0x0D` is whitelisted, readable, and lcc accepts `-p 12 34 0d 02` -- it reports
+`expected length 10`, which is the eight-byte header plus the two payload bytes
+`size` specifies. No answer arrives.
+
+The same call shape works for `0x15` in the same session, seconds apart, after
+the same ASIC reset:
+
+```text
+cmd 0x15   ->  01 00
+cmd 0x0D   ->  Received length -1 does not match expected length 10
+```
+
+The two command words are identical except for the command number, so lcc
+treats them the same and the difference is at the far end. The likely reading
+is that `0x15` is an ASIC query while `0x0D` reaches a sensor register
+(`0x31E0`), and after a reset the ASIC is awake but the sensor is neither
+initialised nor streaming. Issuing it after a capture does not help either,
+because lcc tears the session down as it exits.
+
+Reaching it therefore needs the command to be sent while the sensor is
+running, which is not possible from a second process.

@@ -89,7 +89,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     # The count is spelled out so adding a profile forces the doc to be read,
     # not just the byte size bumped.
     assert (
-        f"current {len(payload.read_bytes()):,}-byte thirteen-profile payload"
+        f"current {len(payload.read_bytes()):,}-byte fifteen-profile payload"
         in control_doc
     )
     assert hashlib.sha1(payload.read_bytes()).hexdigest() in control_doc
@@ -112,6 +112,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "/data/local/tmp/light_l16_timeout_probe_6s_once.sh" in text
     assert "/data/local/tmp/light_l16_mmap_probe_6s_once.sh" in text
     assert "/data/local/tmp/light_l16_bare_6s_once.sh" in text
+    assert "/data/local/tmp/light_l16_a1_long_dark_once.sh" in text
     assert "/data/local/tmp/light_l16_timeout_probe_29s_once.sh" in text
 
     def profile_block(path: str) -> str:
@@ -155,6 +156,9 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     )
     timeout_probe_29s_profile = profile_block(
         "/data/local/tmp/light_l16_timeout_probe_29s_once.sh"
+    )
+    a1_long_dark_profile = profile_block(
+        "/data/local/tmp/light_l16_a1_long_dark_once.sh"
     )
     for profile in (a1_profile, a1_center_af_profile, a1_async_profile):
         assert "MASK0=02\n        MASK1=00\n        MASK2=00" in profile
@@ -221,6 +225,11 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "EXPOSURE_PLAN=selected:29000000000" in timeout_probe_29s_profile
     assert "USE_TIMEOUT_SHIM=yes" in timeout_probe_29s_profile
     assert "CAPTURE_TIMEOUT_SECONDS=180" in timeout_probe_29s_profile
+    # The longest unclamped exposure: 64,896 ns below the observed clamp, and
+    # above the one-second threshold that turns sensor defect correction off.
+    assert "EXPOSURE_ARGS=19450000000" in a1_long_dark_profile
+    assert "MASK0=02\n        MASK1=00\n        MASK2=00" in a1_long_dark_profile
+    assert "USE_ASYNC_SHIM=yes" in a1_long_dark_profile
     # The control profile must load nothing: the point is to see the capture
     # without our own instrumentation in the path.
     assert "USE_ASYNC_SHIM=no" in bare_6s_profile
@@ -292,7 +301,7 @@ def test_fixed_capture_payload_profiles_are_armed_and_cleanup_bounded() -> None:
     assert "CAPTURE_TIMEOUT_SECONDS=60" in text
     assert "MIN_DATA_FREE_KB=262144" in text
     assert "MIN_DATA_FREE_KB=1048576" in text
-    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 13
+    assert text.count("DIAGNOSTIC_LOG_LINES=2000") == 15
     assert "DIAGNOSTIC_LOG_LINES=500" not in text
     assert "ALLOW_CLEAN_NO_REBOOT=yes" in text
     assert "ALLOW_CLEAN_NO_REBOOT=no" in text
@@ -1147,6 +1156,14 @@ def test_the_usage_line_offers_every_profile() -> None:
                             wrapper[wrapper.index("ALL_CONFIRMS="):]))
     assert defined, "no profiles found"
     assert defined <= listed, f"missing from usage: {sorted(defined - listed)}"
+
+    # A flag that is defined and listed but has no branch fails only when
+    # someone runs it: the wrapper prints usage and exits 2.  That happened.
+    head, _, _ = wrapper.partition("\nRUN_STAMP=")
+    branched = set(re.findall(r'\[ "\$1" = "\$(CONFIRM_[A-Z0-9_]+)" \]', head))
+    assert defined <= branched, (
+        f"defined with no branch: {sorted(defined - branched)}"
+    )
 
 
 def test_the_readme_quickstart_refers_to_things_that_exist() -> None:

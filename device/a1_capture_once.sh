@@ -12,6 +12,7 @@ RUN_FACTORY_ASIC_RESET=no
 USE_A1_AF_SHIM=no
 USE_TIMEOUT_SHIM=no
 TIMEOUT_SHIM_VARIANT=timeout_patch
+PASSTHROUGH_READ_BYTES=
 EXPOSURE_COUNT=1
 EXPOSURE_ARGS=20000000
 EXPOSURE_ORDER=common_for_selected_modules
@@ -268,6 +269,67 @@ case "$0" in
         EXPOSURE_ARGS=29000000000
         EXPOSURE_ORDER=common_for_selected_modules
         EXPOSURE_PLAN=selected:29000000000
+        ;;
+    /data/local/tmp/light_l16_a1_long_dark_once.sh)
+        OUT=/data/local/tmp/light_l16_a1_long_dark.result
+        ARM_FILE=/data/local/tmp/light_l16_a1_long_dark.armed
+        ARM_VALUE=A1_LONG_DARK_19450000000NS_GAIN_1.0_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_a1_long_dark_run
+        MODE=A1_LONG_DARK_19450000000NS_ONCE
+        MASK0=02
+        MASK1=00
+        MASK2=00
+        SELECTION_DESCRIPTION='mask=02 00 00 modules=A1 asics=1 async_shim=required long_dark=19.45s'
+        # The longest exposure that is not clamped.  A 29 s request comes back
+        # as 19,450,064,896 ns, and the clamp skips the comparison in
+        # set_integration_time, so the sensor keeps its power-on defect
+        # correction.  Asking for 64,896 ns less should take the normal path,
+        # where anything above 999,999,999 ns leaves the correction off.  A1
+        # alone keeps this to one 16 MB surface.
+        CAPTURE_TIMEOUT_SECONDS=180
+        MIN_DATA_FREE_KB=262144
+        DIAGNOSTIC_LOG_LINES=2000
+        ALLOW_CLEAN_NO_REBOOT=no
+        USE_ASYNC_SHIM=yes
+        EXPOSURE_COUNT=1
+        EXPOSURE_ARGS=19450000000
+        EXPOSURE_ORDER=common_for_selected_modules
+        EXPOSURE_PLAN=selected:19450000000
+        ;;
+    /data/local/tmp/light_l16_dpc_read_once.sh)
+        OUT=/data/local/tmp/light_l16_dpc_read.result
+        ARM_FILE=/data/local/tmp/light_l16_dpc_read.armed
+        ARM_VALUE=DPC_READ_CMD_0D_ONCE
+        WORK_PREFIX=/data/local/tmp/light_l16_dpc_read_run
+        MODE=DPC_READ_CMD_0D_ONCE
+        RUN_FACTORY_ASIC_RESET=yes
+        MASK0=02
+        MASK1=00
+        MASK2=00
+        SELECTION_DESCRIPTION='mask=02 00 00 modules=A1 asics=1 passthrough_read=cmd_0x0D_after_capture'
+        # A normal 20 ms A1 capture, followed by a read of the
+        # defect-correction command while the ASIC is still initialised.
+        # lcc's command word 0x011B000D decodes -- from the bitfield layout in
+        # its own debug symbols -- as cmd 0x0D, one payload byte, and both the
+        # read and write bits set.  Only the read direction is used here, so
+        # nothing on the device is modified.  Its value is the second, direct
+        # source for the state that sensor_dpc_on reports in every LRI.
+        # Four bytes: transaction id (any value), command, and base.  The
+        # whitelist carries two entries per command; base 0x02 is the
+        # read-only one -- 0x0208020D for command 0x0D, two response bytes,
+        # no module mask required.  Same shape as the stock readiness request
+        # already in this script, which sends 12 34 15 02 and gets "01 XX".
+        PASSTHROUGH_READ_BYTES='12 34 0d 02'
+        CAPTURE_TIMEOUT_SECONDS=30
+        MIN_DATA_FREE_KB=262144
+        DIAGNOSTIC_LOG_LINES=2000
+        ALLOW_CLEAN_NO_REBOOT=no
+        USE_ASYNC_SHIM=no
+        USE_TIMEOUT_SHIM=no
+        EXPOSURE_COUNT=1
+        EXPOSURE_ARGS=20000000
+        EXPOSURE_ORDER=common_for_selected_modules
+        EXPOSURE_PLAN=selected:20000000
         ;;
     /data/local/tmp/light_l16_all16_hdr_async_capture_once.sh)
         OUT=/data/local/tmp/light_l16_all16_hdr_async_capture.result
@@ -918,7 +980,13 @@ if [ "$RUN_AUTOFOCUS" = "yes" ]; then
     esac
     [ ! -e "$AUTOFOCUS_RESPONSE_PATH" ] || \
         fail autofocus_response_path_already_exists
+fi
 
+# The reset and its readiness reply are what put the ASICs in a state that
+# answers a passthrough at all; autofocus needs them, but is not the only
+# thing that does.  Autofocus still requires this block through the check
+# above, so the order it sees is unchanged.
+if [ "$RUN_FACTORY_ASIC_RESET" = "yes" ]; then
     # Factory actuator tests first place all three ASICs in normal boot mode
     # through prog_app_p2 -q. Static analysis of this exact binary confirms
     # that the -q branch only selects normal strap GPIOs and toggles the three
@@ -963,6 +1031,32 @@ if [ "$RUN_AUTOFOCUS" = "yes" ]; then
     [ "$ASIC_READY_OK_COUNT" = "1" ] || \
         fail unexpected_asic_ready_response
     ASIC_READY_RESPONSE=ready_01
+
+    if [ -n "$PASSTHROUGH_READ_BYTES" ]; then
+        # Read one whitelisted command here, where the readiness reply just
+        # proved the ASIC answers.  A cold passthrough returns "Received
+        # length -1 does not match expected length 10", and so does one issued
+        # after a capture, because lcc tears the session down on exit.  base
+        # 0x02 selects the read-only entry of the command word; nothing is
+        # written.
+        printf 'passthrough_read_argv=<verified-lcc-copy> -m 0 -s 0 -r -p %s\n' \
+            "$PASSTHROUGH_READ_BYTES"
+        (
+            cd "$WORKDIR" || exit 126
+            /system/bin/timeout -k 2s 10s "$LCC_COPY" \
+                -m 0 -s 0 -r -p $PASSTHROUGH_READ_BYTES
+        ) > "$WORKDIR/lcc.passthrough.txt" 2>&1
+        PASSTHROUGH_STATUS=$?
+        printf 'passthrough_read_returned=%s\n' "$PASSTHROUGH_STATUS"
+        PASSTHROUGH_RESPONSE=$(
+            /system/bin/toybox grep -E '^[0-9A-F][0-9A-F] ' \
+                "$WORKDIR/lcc.passthrough.txt" | /system/bin/toybox tr '\n' ' '
+        )
+        printf 'passthrough_read_response=%s\n' "${PASSTHROUGH_RESPONSE:-none}"
+    fi
+fi
+
+if [ "$RUN_AUTOFOCUS" = "yes" ]; then
     if /system/bin/toybox pgrep -x lcc >/dev/null 2>&1; then
         fail lcc_process_after_asic_ready
     fi

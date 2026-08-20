@@ -20,6 +20,8 @@ CONFIRM_BARE_6S=--execute-bare-all16-6s-once-and-reboot
 CONFIRM_TIMEOUT_PROBE_29S=--execute-timeout-shim-all16-29s-once-and-reboot
 CONFIRM_DARK_SERIES=--execute-dark-frame-series-24-captures-once-and-reboot
 CONFIRM_DARK_LONG_SERIES=--execute-dark-frame-long-series-15-captures-once-and-reboot
+CONFIRM_A1_LONG_DARK=--execute-a1-long-dark-19450ms-once-and-reboot
+CONFIRM_DPC_READ=--execute-dpc-read-once-and-reboot
 EXPECTED_SHIM_SIZE=9080
 EXPECTED_SHIM_SHA1=0b93dc17a2c4219943293d96b7edda39be61613d
 EXPECTED_TIMEOUT_SHIM_SIZE=10084
@@ -290,6 +292,39 @@ elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_DARK_LONG_SERIES" ]; then
     EXPOSURE_MANIFEST_REQUIRED=no
     EXPECTED_CAPTURES_REQUESTED=15
     EXPECTED_CAPTURE_PLAN='100000000:1.0 100000000:1.0 100000000:1.0 1000000000:1.0 1000000000:1.0 1000000000:1.0 6000000000:1.0 6000000000:1.0 6000000000:1.0 29000000000:1.0 29000000000:1.0 29000000000:1.0 100000000:1.0 100000000:1.0 100000000:1.0'
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_A1_LONG_DARK" ]; then
+    PROFILE=a1-long-dark
+    PROFILE_LABEL=A1-LONG-DARK
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_a1_long_dark_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_a1_long_dark.result
+    REMOTE_ARM=/data/local/tmp/light_l16_a1_long_dark.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_a1_long_dark_run
+    REMOTE_SHIM=/data/local/tmp/liblcc_async_writer_shim.so
+    ARM_VALUE=A1_LONG_DARK_19450000000NS_GAIN_1.0_ONCE
+    EXPECTED_MODE=A1_LONG_DARK_19450000000NS_ONCE
+    OUTPUT_PREFIX=a1-long-dark
+    POLL_LIMIT=300
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=yes
+    EXPECTED_EXPOSURE_COUNT=1
+    EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
+    EXPECTED_EXPOSURE_PLAN=selected:19450000000
+elif [ "$#" -eq 1 ] && [ "$1" = "$CONFIRM_DPC_READ" ]; then
+    PROFILE=dpc-read
+    PROFILE_LABEL=DPC-READ
+    REMOTE_PAYLOAD=/data/local/tmp/light_l16_dpc_read_once.sh
+    REMOTE_RESULT=/data/local/tmp/light_l16_dpc_read.result
+    REMOTE_ARM=/data/local/tmp/light_l16_dpc_read.armed
+    REMOTE_WORK_PREFIX=/data/local/tmp/light_l16_dpc_read_run
+    ARM_VALUE=DPC_READ_CMD_0D_ONCE
+    EXPECTED_MODE=DPC_READ_CMD_0D_ONCE
+    OUTPUT_PREFIX=dpc-read
+    POLL_LIMIT=120
+    PASS_REBOOT_REQUIRED=yes
+    ASYNC_SHIM_REQUIRED=no
+    EXPECTED_EXPOSURE_COUNT=1
+    EXPECTED_EXPOSURE_ORDER=common_for_selected_modules
+    EXPECTED_EXPOSURE_PLAN=selected:20000000
 else
     # Built from one list, so adding a profile cannot leave the usage line
     # with the wrong number of placeholders -- which it silently did twice.
@@ -297,7 +332,8 @@ else
 $CONFIRM_A_GROUP_INLINE_AF $CONFIRM_A1_ASYNC $CONFIRM_ALL16 \
 $CONFIRM_ALL16_ASYNC $CONFIRM_ALL16_HDR_ASYNC $CONFIRM_TIMEOUT_PROBE \
 $CONFIRM_TIMEOUT_PROBE_6S $CONFIRM_MMAP_PROBE_6S $CONFIRM_BARE_6S \
-$CONFIRM_TIMEOUT_PROBE_29S $CONFIRM_DARK_SERIES $CONFIRM_DARK_LONG_SERIES"
+$CONFIRM_TIMEOUT_PROBE_29S $CONFIRM_DARK_SERIES $CONFIRM_DARK_LONG_SERIES \
+$CONFIRM_A1_LONG_DARK $CONFIRM_DPC_READ"
     printf 'usage: %s {%s}\n' "$0" \
         "$(printf '%s|' $ALL_CONFIRMS | sed 's/|$//')" >&2
     printf 'Profiles perform one real lcc capture request. HDR uses fixed 1.25/5/20 ms module roles; AF, shim, and ALL16 profiles always reboot.\n' >&2
