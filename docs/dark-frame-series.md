@@ -408,3 +408,90 @@ Across cells:
 The tool reports measured quantities and does not convert to electrons. A
 conversion gain in electrons per DN cannot be derived from dark frames alone;
 it needs illuminated flat fields, which this series does not record.
+
+
+## Sensor defect correction switches on exposure, and it is in every file
+
+Every LRI records, per module, whether the sensor's own defect correction was
+active. It is field 16 of the module message, `sensor_dpc_on` in lcc's
+protobuf definitions. The covered 15-capture series settles what drives it --
+all sixteen modules agree in every frame:
+
+```text
+requested      recorded ns    dpc_on
+0.1 s            99,999,776     1
+1 s             999,927,744     0
+6 s           6,000,159,744     0
+29 s         19,450,064,896     1
+```
+
+The rule is a comparison against one second, and it is made against the
+**requested** exposure, before row quantisation. The 1 s step proves it: the
+recorded value is 999,927,744 ns, which is below the threshold, yet the
+correction is off. Predicting the state from the recorded exposure gets that
+step wrong.
+
+The 29 s row is the clamp, and it does not follow the rule at all. Nor is it
+a leftover from the previous frame -- that was 6 s with the correction off.
+An exposure request past the clamp skips the comparison, and the sensor keeps
+the state it has after initialisation, which is on.
+
+A control run separates the two cleanly. Requesting 19,450,000,000 ns -- below
+the clamp, above the threshold -- produces the same recorded exposure as the
+29 s request and the opposite state:
+
+```text
+requested 29,000,000,000  ->  recorded 19,450,064,896  dpc_on 1
+requested 19,450,000,000  ->  recorded 19,450,064,896  dpc_on 0
+```
+
+Same exposure, opposite correction. The difference is the code path, not the
+integration time.
+
+### What this means for a dark or flat series
+
+Nothing below one second is uncorrected. For read noise, DSNU and fixed
+pattern noise -- measurements whose signal *is* the outlying pixels -- the
+correction removes what is being measured. A series stepping 0.5 ms, 2 ms,
+8 ms, 32 ms, 100 ms, 1 s and 6 s has five corrected steps and two clean ones,
+with the discontinuity in the middle.
+
+A pair either side of the threshold is worth taking: 999 ms and 1.001 s differ
+by 0.2 % in exposure and completely in correction state, which measures the
+correction rather than merely recording it.
+
+Never request more than 19.4503 s. The result looks entirely successful --
+zero exit, complete LRI, plausible metadata -- and is silently both clamped
+and corrected.
+
+## Dark current: the surface has none that this camera can show
+
+The three DPC-free, unclamped points, module A1, covered, gain 1.0:
+
+```text
+            mean     trimmed mean (<200 DN)
+ 1.00 s    42.099          42.074
+ 6.00 s    42.213          42.107
+19.45 s    42.279          42.067
+
+slope      +0.0088 DN/s    -0.0009 DN/s
+```
+
+The whole rise is in the tail. Trimming the saturating pixels leaves a flat
+line: the median stays at 42, p90 at 43, and p99 moves from 44 to 45 across a
+twentyfold increase in exposure. Meanwhile the count of pixels at or above
+1023 goes from 23 to 263.
+
+An earlier reading of 0.055 DN/s from the untrimmed mean was arithmetically
+right and wrong as a description: it measures how fast a few hundred defective
+pixels grow, not a dark current across the surface. There is no surface dark
+current to fit here, which is why a slope through all four steps -- two of
+them corrected -- comes out at zero.
+
+For a forward model this is good news. Darks on this sensor are black level
+plus a defect map, not a temperature-dependent floor.
+
+Temperature was not a factor: the three 100 ms frames at the end of the series
+differ from the three at the start by 0.0027 DN, against 0.68 DN of read
+noise. The compressed file sizes say the same independently -- 69.1 MB at both
+ends, rising to 77.5-78.5 MB for the longest exposures.
