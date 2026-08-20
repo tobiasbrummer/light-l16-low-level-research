@@ -36,8 +36,11 @@ compatibility.
   two-stage UI, one-install lock, script hashes, outer timeout, or reboot
   fallback. An app built before a payload change carries the older payload;
   rebuild it rather than assuming it matches this repository.
-- Long exposures are bounded by the firmware at 29 s. Requesting more is
-  rejected by the payload's own plan check rather than passed to the sensor.
+- Long exposures are clamped at 19.45 s, silently: a longer request returns
+  success and produces a complete capture at the shorter exposure. Read the
+  exposure recorded in the result rather than trusting the request. The
+  payload's plan check bounds the request itself at 11 digits, which is not
+  the same limit.
 - Never test on a device you do not own or administer with permission.
 
 ## Reporting a problem

@@ -15,8 +15,9 @@ written, and no persistent root is installed.
 
 | | |
 |---|---|
-| Exposure range | 10,443 ns (sensor floor) to 29 s, all sixteen modules |
+| Exposure range | 10,443 ns (sensor floor) to 19.45 s, all sixteen modules |
 | Exposure accuracy | Quantised to row time: 6 s is recorded as 6,000,159,744 ns |
+| Above 19.45 s | Silently clamped. 29 s was requested; 19,450,064,896 ns was used |
 | Modules | A1-A5, B1-B5, C1-C6 in one request, mask `FE FF 01` |
 | Full frame | 259,999,993 bytes, sixteen RAW10 surfaces at 4160 x 3120 |
 | Gain | `-g` is analog only, no digital remainder, no rounding up to 4.0 |
@@ -27,8 +28,12 @@ written, and no persistent root is installed.
 Each capture records the exposure and gain it actually used, so the
 quantisation is visible per file rather than assumed.
 
-The 29 s ceiling is the firmware's, not the sensor's. There is no exposure
-limit around six seconds -- that was an artefact of this project's own
+Requests beyond 19.45 s are accepted and clamped without any error: `lcc`
+returns 0, the capture completes, and only the exposure recorded in the file
+reveals what actually happened. Always read it back rather than assuming the
+request was honoured -- this project got that wrong once and published it.
+
+There is no exposure limit around six seconds -- that was an artefact of this project's own
 asynchronous LRI writer, which is [documented in
 detail](docs/lcc-control.md#long-exposures-fail-in-writefile-not-on-the-completion-timeout)
 because the wrong explanation survived several rounds of plausible evidence.

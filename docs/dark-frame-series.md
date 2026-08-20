@@ -170,10 +170,11 @@ changing the plan requires deliberately updating every pin.
 The payload now carries two profiles, selected by invocation path: the 24-capture
 series described above, and a 15-capture long-exposure series at
 `light_l16_dark_frame_long_series_once.sh` that reaches for the dark current the
-short series could not resolve. Its exposure axis is 100 ms, 1 s, 6 s, and 29 s
+short series could not resolve. Its exposure axis is 100 ms, 1 s, 6 s, and a requested 29 s that the
+sensor clamps to 19.45 s
 at gain 1.0, three repeats each, and its final cell repeats the first: the
 difference between them measures the thermal drift over the run, which is the
-term that made the short series' apparent slope uninterpretable. The 29 s point
+term that made the short series' apparent slope uninterpretable. The longest point
 sits just below the 29.98 s ceiling Camera2 reports, and the per-capture timeout
 rises from 60 to 120 seconds.
 

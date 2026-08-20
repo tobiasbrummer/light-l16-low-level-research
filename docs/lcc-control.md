@@ -792,7 +792,7 @@ no lens timeout. Its matching supervisor TXT also verifies the expected payload
 and shim hashes, focused-lock result, zero LCC exit, complete cleanup, settled
 services and camera clients, identical LRI size/SHA-1, and intended normal
 reboot. The seventh profile's exact per-module HDR exposure
-assignment also remains unexecuted. The thirteenth profile takes the same capture to 29 s, the firmware's
+assignment also remains unexecuted. The thirteenth profile requests 29 s, which the sensor clamps to 19.45 s; it is the firmware's
 stated ceiling and the first exposure where the HAL derives T+5 instead of
 its flat 15 s. The twelfth profile is the control for both: the same 6 s capture with no
 preload at all. The eleventh profile repeats the 6 s capture with the mmap-failure probe in
@@ -1398,7 +1398,8 @@ only when the async writer moves that work onto a thread nobody waits for.
 Every run that has ever shown the ceiling had the async writer loaded,
 including the long dark series, whose payload sets `USE_ASYNC_SHIM=yes`
 globally. That series aborted on capture 7 of 15 -- its first 6 s frame. Its
-6 s and 29 s exposures were never attempted by the hardware.
+6 s and 29 s exposures were never attempted by the hardware. (The 29 s
+request, when it was finally made, ran at a clamped 19.45 s.)
 
 The 24-capture dark frame series is unaffected: every exposure in it is 20 ms
 or shorter, far below where the ordering changes.
@@ -1448,10 +1449,30 @@ the HAL does, which separates the cases: an inline write lands before
 teardown, a worker after it. Disabling the fix makes that test fail, which is
 the only evidence that it tests anything.
 
-### 29 s, the firmware's ceiling
+### A 29 s request completes -- at 19.45 s
 
-The longest exposure the firmware admits now completes with all sixteen
-modules and the writer active:
+Correction. This section previously reported that 29 s captures work. The
+capture completes, but not at 29 s. The exposure recorded in the file is
+19,450,064,896 ns, and the request is clamped to it without any error: `lcc`
+exits 0, the LRI is complete, and every log line looks like success.
+
+The mistake was not reading the recorded exposure back. It was checked for the
+6 s capture (6,000,159,744 ns, quantised as expected) and then assumed to hold
+at 29 s. It does not, and nothing in the capture path says so. The three
+shorter steps are accurate to better than 0.01%; only the longest is clamped:
+
+```text
+requested         recorded
+100,000,000       99,999,776
+1,000,000,000     999,927,744
+6,000,000,000     6,000,159,744
+29,000,000,000    19,450,064,896   <- clamped
+```
+
+Read the recorded exposure. It is in every file for exactly this reason.
+
+What the run does establish, at 19.45 s, with all sixteen modules and the
+writer active:
 
 ```text
 max_exposure_f: 29.000000, single_burst_delay: 29.000000, total_delay: 29.100000
@@ -1470,8 +1491,11 @@ disassembly.
 
 Decoding the frame gives sixteen module surfaces with real data. The means
 range from 44 to 372 DN, which is collected light rather than dark current --
-the camera was not covered. A dark measurement at this exposure still has to
-be taken under cover.
+the camera was not covered.
+
+Where 19.45 s comes from is now the open question. It is not the 29 s the
+firmware admits as a request, so those are two different limits, and this
+project has been treating them as one.
 
 Also established, independently of all this: the timeout field at instance
 offset `0x24` is real, the formula predicting it holds on hardware, and it can
